@@ -1,0 +1,33 @@
+# PurrTechDetailLogger - sablony itemu/bloku ke sledovani.
+# Kazda sablona ma unikatni klic (nazev pod "templates:") a definuje, jaky item/blok se ma
+# sledovat. Po zmene tohoto souboru spust /purrlog reload (vyzaduje permission
+# "purrtechdetaillogger.admin", ktere maji OP hraci ve vychozim stavu).
+#
+# Sablonu jde take vytvorit primo ve hre: drz item v ruce a spust
+# /purrlog template import <klic> - vyplni material (a custom-model-data, pokud item ma) za tebe.
+#
+# Zbytek admin prikazu: /purrlog gui (DisplayGUI admin prohlizec, pokud je DisplayGUI
+# nainstalovane), /purrlog history <uuid>, /purrlog alerts, /purrlog sweep. Napis holy
+# "/purrlog" pro kompletni napovedu.
+#
+# Priklad:
+# templates:
+#   legendary_sword:
+#     material: DIAMOND_SWORD
+#     custom-model-data: 1001
+#     track-items: true
+#     track-blocks: false
+#   special_chest:
+#     material: CHEST
+#     pdc-marker:
+#       key: "someplugin:special"
+#       value: "true"
+#     track-items: true
+#     track-blocks: true
+#   named_item:
+#     material: NETHERITE_INGOT
+#     name-pattern: "Rare Ingot"
+#     track-items: true
+#     track-blocks: false
+
+templates: {}

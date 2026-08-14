@@ -1,0 +1,18 @@
+name: PurrTechDetailLogger
+version: '${version}'
+
+main: eu.purrtech.detaillogger.DetailLoggerPlugin
+api-version: '1.21.11'
+load: POSTWORLD
+
+# Paper plugins don't support YAML-based `commands:` declarations (JavaPlugin#getCommand throws
+# during onEnable if you try) - /purrlog is registered in code via JavaPlugin#registerCommand.
+
+# DisplayGUI is optional - the admin GUI (/purrlog gui) and [purrtechlog] menu-view-logging action
+# tag only activate if it's actually installed and enabled (checked in code, never assumed).
+dependencies:
+  server:
+    DisplayGUI:
+      load: BEFORE
+      required: false
+      join-classpath: true
