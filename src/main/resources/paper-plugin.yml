@@ -12,7 +12,7 @@ load: POSTWORLD
 # tag only activate if it's actually installed and enabled (checked in code, never assumed).
 dependencies:
   server:
-    DisplayGUI:
+    PurrTechDisplayGUI:
       load: BEFORE
       required: false
       join-classpath: true

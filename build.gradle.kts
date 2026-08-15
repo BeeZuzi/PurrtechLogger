@@ -15,7 +15,7 @@ dependencies {
     // DisplayGUI is a soft dependency (the admin GUI is optional, see paper-plugin.yml) and isn't
     // published to a repository - both plugins are local projects on this machine, so a direct
     // file reference to its build output is the pragmatic choice for a solo-dev setup.
-    compileOnly(files("/Users/Zuzka/IdeaProjects/DisplayGUI/build/libs/DisplayGUI-1.0.jar"))
+    compileOnly(files("lib/PurrTechDisplayGUI-1.0.jar"))
 
     // TemplateConfigLoader (YamlConfiguration/Material) and StackMath (pure logic) are testable
     // without a running server - paper-api's config/Material classes are self-contained. Anything

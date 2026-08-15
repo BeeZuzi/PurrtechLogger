@@ -1,9 +1,9 @@
 package eu.purrtech.detaillogger.gui;
 
 import eu.purrtech.detaillogger.db.dao.EventDao;
+import eu.purrtech.displaygui.API.actions.MenuActionRegistry;
 import org.bukkit.Location;
 import org.bukkit.entity.Player;
-import org.lordking.displaygui.API.actions.MenuActionRegistry;
 
 /**
  * Registers the {@code [purrtechlog]} config action tag so a third-party DisplayGUI menu author
@@ -11,7 +11,7 @@ import org.lordking.displaygui.API.actions.MenuActionRegistry;
  * button's {@code left-click}/{@code right-click} list in their own menu YAML, alongside its
  * {@code item:} field.
  * <p>
- * This is coarser than per-unit tracking: {@link org.lordking.displaygui.API.MenuButton} (the
+ * This is coarser than per-unit tracking: {@link eu.purrtech.displaygui.API.MenuButton} (the
  * handle available in the click context) has no back-reference to the config's {@code item:}
  * field or a specific tracked UUID - DisplayGUI buttons are typically static UI declarations, not
  * built per physical item instance the way this plugin's own admin GUI is. So this logs a

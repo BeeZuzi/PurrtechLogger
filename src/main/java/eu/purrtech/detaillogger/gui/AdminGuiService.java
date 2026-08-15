@@ -6,27 +6,31 @@ import eu.purrtech.detaillogger.db.dao.EventRecord;
 import eu.purrtech.detaillogger.db.dao.TemplateDao;
 import eu.purrtech.detaillogger.db.dao.TrackedUnitRecord;
 import eu.purrtech.detaillogger.tracking.HistoryService;
+import eu.purrtech.displaygui.API.PageType;
+import eu.purrtech.displaygui.API.data.buttonData.ButtonData;
+import eu.purrtech.displaygui.API.data.buttonData.ItemButtonData;
+import eu.purrtech.displaygui.API.data.buttonData.ScrollButtonData;
+import eu.purrtech.displaygui.API.data.layerData.DisplayLayerData;
+import eu.purrtech.displaygui.API.data.layerData.ItemDisplayLayerData;
+import eu.purrtech.displaygui.API.data.layerData.LayersData;
+import eu.purrtech.displaygui.API.data.layerData.TextDisplayLayerData;
+import eu.purrtech.displaygui.API.data.screenPageData.PageData;
+import eu.purrtech.displaygui.API.data.screenPageData.ScreenPageData;
+import eu.purrtech.displaygui.API.events.MenuButtonClickEvent;
+import eu.purrtech.displaygui.Internal.PurrTechDisplayGUI;
+import eu.purrtech.displaygui.Internal.manager.DisplayManager;
 import io.papermc.paper.event.player.AsyncChatEvent;
 import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 import org.bukkit.Bukkit;
 import org.bukkit.Color;
 import org.bukkit.Material;
+import org.bukkit.OfflinePlayer;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.plugin.Plugin;
-import org.lordking.displaygui.API.DisplayGuiAPI;
-import org.lordking.displaygui.API.PageType;
-import org.lordking.displaygui.API.data.buttonData.ButtonData;
-import org.lordking.displaygui.API.data.buttonData.ItemButtonData;
-import org.lordking.displaygui.API.data.buttonData.ScrollButtonData;
-import org.lordking.displaygui.API.data.layerData.ItemDisplayLayerData;
-import org.lordking.displaygui.API.data.layerData.LayersData;
-import org.lordking.displaygui.API.data.layerData.TextDisplayLayerData;
-import org.lordking.displaygui.API.data.screenPageData.PageData;
-import org.lordking.displaygui.API.data.screenPageData.ScreenPageData;
-import org.lordking.displaygui.API.events.MenuButtonClickEvent;
+import eu.purrtech.displaygui.API.DisplayGuiAPI;
 
 import java.sql.SQLException;
 import java.time.Instant;
@@ -73,11 +77,12 @@ public final class AdminGuiService implements Listener {
 
     public void openMainMenu(Player player) {
         List<ButtonData> buttons = new ArrayList<>();
-        buttons.add(navButton("search", -1.0, 0.5, 0.05, "Hledat podle UUID", e -> beginSearch(player)));
-        buttons.add(navButton("alerts", -1.0, 0.2, 0.05, "Nevyresene alerty", e -> openAlerts(player)));
-        buttons.add(navButton("close", -1.0, -0.1, 0.05, "Zavrit", e -> DisplayGuiAPI.closeMenu(player)));
+        buttons.add(navButton("search", -1.5, -1.2, 0.04, "Hledat podle UUID", e -> beginSearch(player)));
+        buttons.add(navButton("alerts", -1.5, -1.8, 0.05, "Nevyresene alerty", e -> openAlerts(player)));
+        buttons.add(navButton("close", -1.5, -2.4, 0.05, "Zavrit", e -> DisplayGuiAPI.closeMenu(player)));
 
         ScreenPageData screen = new ScreenPageData(backgroundPage(), buttons, "purrtechlog:main", MENU_DISTANCE_PIXELS);
+//        DisplayGuiAPI.closeMenu(player);
         DisplayGuiAPI.openMenu(player, screen);
     }
 
@@ -149,16 +154,31 @@ public final class AdminGuiService implements Listener {
         List<String> historyLines = new ArrayList<>();
         for (EventRecord e : history.events()) {
             String where = e.world() != null ? " @ " + e.world() + " " + e.x() + "," + e.y() + "," + e.z() : "";
-            historyLines.add(formatTime(e.timestamp()) + " " + e.eventType() + where);
+            String playerUUID = e.playerUuid() != null ? " hrac=" + e.playerUuid() : "";
+            if (!playerUUID.isEmpty()) {
+                OfflinePlayer offlinePlayer = Bukkit.getOfflinePlayer(e.playerUuid());
+                if (offlinePlayer.isOnline()) {
+                    Player onlinePlayer = offlinePlayer.getPlayer();
+                    if (onlinePlayer != null) {
+                        playerUUID = playerUUID + " alias=" + onlinePlayer.displayName().insertion();
+                    }
+                } else {
+                    playerUUID = playerUUID + " alias: " + offlinePlayer.getPlayerProfile().getName();
+                }
+
+
+            }
+            historyLines.add(formatTime(e.timestamp()) + " " + e.eventType() + where + " " + playerUUID + " " + e.detail());
         }
 
         List<ButtonData> buttons = new ArrayList<>();
-        buttons.add(iconButton(-1.3, 0.9, 0.05, icon));
-        buttons.add(infoTextButton(-0.9, 0.9, 0.05, infoLines));
-        buttons.add(scrollListButton("history", -1.3, 0.35, 0.05, historyLines, "(zadna historie)"));
-        buttons.add(navButton("back", -1.3, -0.15, 0.05, "Zpet", e -> openMainMenu(player)));
+        buttons.add(iconButton(-0, 1.0, 0.05, icon));
+        buttons.add(infoTextButton(-0, -1.25, 0.05, infoLines));
+        buttons.add(scrollListButton("history", -3, -1, 0.05, historyLines, "(zadna historie)"));
+        buttons.add(navButton("back", -1.5, -2, -0.05, "Zpet", e -> openMainMenu(player)));
 
         ScreenPageData screen = new ScreenPageData(backgroundPage(), buttons, "purrtechlog:detail:" + unit.uuid(), MENU_DISTANCE_PIXELS);
+//        DisplayGuiAPI.closeMenu(player);
         DisplayGuiAPI.openMenu(player, screen);
     }
 
@@ -182,19 +202,25 @@ public final class AdminGuiService implements Listener {
         }
 
         List<ButtonData> buttons = new ArrayList<>();
-        buttons.add(scrollListButton("alerts", -1.3, 0.6, 0.05, lines, "(zadne nevyresene alerty)"));
-        buttons.add(navButton("back", -1.3, -0.15, 0.05, "Zpet", e -> openMainMenu(player)));
+        buttons.add(scrollListButton("alerts", -1.5, -1.55, 0.05, lines, "(zadne nevyresene alerty)"));
+        buttons.add(navButton("back", -1.5, -2.15, 0.05, "Zpet", e -> openMainMenu(player)));
 
         ScreenPageData screen = new ScreenPageData(backgroundPage(), buttons, "purrtechlog:alerts", MENU_DISTANCE_PIXELS);
+//        DisplayGuiAPI.closeMenu(player);
         DisplayGuiAPI.openMenu(player, screen);
     }
 
     private PageData backgroundPage() {
         TextDisplayLayerData bg = new TextDisplayLayerData(0, 0, 0, GUI_PATH, "bg", 1)
-                .setText(List.of("PurrTechDetailLogger"))
-                .setBackground(Color.fromARGB(200, 15, 15, 15));
+                .setText(List.of("PurrTechDetailLogger", "", "", ""))
+                .setBackground(Color.fromARGB(100, 15, 15, 15))
+                .setAutoFitText(true);
+
+        bg.setScale(bg.getVectorWithPixels(30,30,0));
+        bg.setWidth(3);
+        bg.setHeight(3);
         LayersData design = new LayersData(List.of(bg), GUI_PATH + ":background", GUI_PATH);
-        return new PageData(-1.5, 1.15, 0, design, PageType.NORMAL);
+        return new PageData(0, 0, 0, design, PageType.NORMAL);
     }
 
     private ButtonData navButton(String id, double x, double y, double z, String label,
@@ -205,7 +231,7 @@ public final class AdminGuiService implements Listener {
         LayersData design = new LayersData(List.of(text), GUI_PATH + ":" + id, GUI_PATH);
         return ButtonData.builder()
                 .at(x, y, z)
-                .size(140, 20)
+                .size(60, 5)
                 .layers(design)
                 .id(id)
                 .onLeftClick(onClick)
@@ -219,7 +245,7 @@ public final class AdminGuiService implements Listener {
         LayersData design = new LayersData(List.of(text), GUI_PATH + ":info", GUI_PATH);
         return ButtonData.builder()
                 .at(x, y, z)
-                .size(160, 60)
+                .size(30, 10)
                 .layers(design)
                 .id("info")
                 .build();
@@ -231,7 +257,7 @@ public final class AdminGuiService implements Listener {
         LayersData design = new LayersData(List.of(itemLayer), GUI_PATH + ":icon", GUI_PATH);
         return ItemButtonData.itemButtonBuilder()
                 .at(x, y, z)
-                .size(32, 32)
+                .size(10, 32)
                 .layers(design)
                 .id("icon")
                 .itemLayer(1)
@@ -244,11 +270,11 @@ public final class AdminGuiService implements Listener {
         LayersData design = new LayersData(List.of(content), GUI_PATH + ":" + id, GUI_PATH);
         return ScrollButtonData.scrollButtonBuilder()
                 .at(x, y, z)
-                .size(220, 130)
+                .size(20, 130)
                 .layers(design)
                 .id(id)
                 .contentLayer(1)
-                .visibleRows(8)
+                .visibleRows(4)
                 .items(items.isEmpty() ? List.of(emptyLabel) : items)
                 .build();
     }

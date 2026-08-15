@@ -112,8 +112,8 @@ public final class DetailLoggerPlugin extends JavaPlugin {
      */
     private AdminGuiService setupDisplayGuiIntegration(TemplateDao templateDao, EventDao eventDao,
                                                          DupeAlertDao dupeAlertDao, HistoryService historyService) {
-        if (!getServer().getPluginManager().isPluginEnabled("DisplayGUI")) {
-            getLogger().info("DisplayGUI nenalezeno - admin GUI (/purrlog gui) a [purrtechlog] akce nejsou k dispozici.");
+        if (!getServer().getPluginManager().isPluginEnabled("PurrTechDisplayGUI")) {
+            getLogger().info("PurrTechDisplayGUI nenalezeno - admin GUI (/purrlog gui) a [purrtechlog] akce nejsou k dispozici.");
             return null;
         }
         AdminGuiService adminGuiService = new AdminGuiService(historyService, templateDao, dupeAlertDao, this, getLogger());
