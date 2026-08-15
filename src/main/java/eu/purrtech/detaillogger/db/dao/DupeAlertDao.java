@@ -66,6 +66,44 @@ public final class DupeAlertDao {
         }
     }
 
+    /**
+     * Blocking read - must be called off the main thread.
+     */
+    public List<DupeAlertRecord> findByPlayer(String playerUuid) throws SQLException {
+        MainThreadCheck.assertAsync();
+        Connection connection = borrow();
+        try (PreparedStatement ps = connection.prepareStatement("""
+                SELECT id, template_id, unit_uuid, detected_at, expected_alive_count, observed_count,
+                       world, x, y, z, player_uuid, severity, note
+                FROM dupe_alerts WHERE player_uuid = ? ORDER BY detected_at DESC
+                """)) {
+            ps.setString(1, playerUuid);
+            try (ResultSet rs = ps.executeQuery()) {
+                List<DupeAlertRecord> results = new ArrayList<>();
+                while (rs.next()) {
+                    results.add(new DupeAlertRecord(
+                            rs.getLong("id"),
+                            nullableInt(rs, "template_id"),
+                            rs.getString("unit_uuid"),
+                            rs.getLong("detected_at"),
+                            nullableInt(rs, "expected_alive_count"),
+                            nullableInt(rs, "observed_count"),
+                            rs.getString("world"),
+                            nullableInt(rs, "x"),
+                            nullableInt(rs, "y"),
+                            nullableInt(rs, "z"),
+                            rs.getString("player_uuid"),
+                            rs.getString("severity"),
+                            rs.getString("note")
+                    ));
+                }
+                return results;
+            }
+        } finally {
+            database.readPool().release(connection);
+        }
+    }
+
     private static Integer nullableInt(ResultSet rs, String column) throws SQLException {
         int value = rs.getInt(column);
         return rs.wasNull() ? null : value;

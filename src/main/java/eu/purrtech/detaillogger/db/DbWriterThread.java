@@ -55,8 +55,8 @@ final class DbWriterThread extends Thread {
         try {
             connection.setAutoCommit(false);
             try (PreparedStatement events = connection.prepareStatement("""
-                            INSERT INTO events(unit_uuid, event_type, timestamp, world, x, y, z, player_uuid, detail)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            INSERT INTO events(unit_uuid, event_type, timestamp, world, x, y, z, player_uuid, detail, gamemode)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                             """);
                  PreparedStatement units = connection.prepareStatement("""
                             INSERT INTO tracked_units(uuid, template_id, kind, origin, duplicated_from_uuid,
@@ -98,6 +98,22 @@ final class DbWriterThread extends Thread {
                             """);
                  PreparedStatement updateKind = connection.prepareStatement("""
                             UPDATE tracked_units SET kind = ? WHERE uuid = ?
+                            """);
+                 PreparedStatement upsertPlayer = connection.prepareStatement("""
+                            INSERT INTO players(uuid, current_name, first_joined_at, last_joined_at, online)
+                            VALUES (?, ?, ?, ?, ?)
+                            ON CONFLICT(uuid) DO UPDATE SET
+                                current_name=excluded.current_name, last_joined_at=excluded.last_joined_at,
+                                online=excluded.online
+                            """);
+                 PreparedStatement setPlayerOffline = connection.prepareStatement("""
+                            UPDATE players SET online = 0, last_seen_at = ? WHERE uuid = ?
+                            """);
+                 PreparedStatement insertNameHistory = connection.prepareStatement("""
+                            INSERT INTO player_name_history(player_uuid, name, changed_at) VALUES (?, ?, ?)
+                            """);
+                 PreparedStatement resetAllOffline = connection.prepareStatement("""
+                            UPDATE players SET online = 0 WHERE online = 1
                             """)) {
 
                 int eventCount = 0;
@@ -107,6 +123,10 @@ final class DbWriterThread extends Thread {
                 int templateCount = 0;
                 int markDestroyedCount = 0;
                 int updateKindCount = 0;
+                int upsertPlayerCount = 0;
+                int setPlayerOfflineCount = 0;
+                int insertNameHistoryCount = 0;
+                boolean resetAllOfflineRequested = false;
 
                 for (DbTask task : batch) {
                     switch (task) {
@@ -146,6 +166,29 @@ final class DbWriterThread extends Thread {
                             updateKind.addBatch();
                             updateKindCount++;
                         }
+                        case DbTask.UpsertPlayerTask t -> {
+                            upsertPlayer.setString(1, t.uuid());
+                            upsertPlayer.setString(2, t.name());
+                            upsertPlayer.setLong(3, t.joinedAt());
+                            upsertPlayer.setLong(4, t.joinedAt());
+                            upsertPlayer.setBoolean(5, t.online());
+                            upsertPlayer.addBatch();
+                            upsertPlayerCount++;
+                        }
+                        case DbTask.SetPlayerOfflineTask t -> {
+                            setPlayerOffline.setLong(1, t.lastSeenAt());
+                            setPlayerOffline.setString(2, t.uuid());
+                            setPlayerOffline.addBatch();
+                            setPlayerOfflineCount++;
+                        }
+                        case DbTask.InsertNameHistoryTask t -> {
+                            insertNameHistory.setString(1, t.playerUuid());
+                            insertNameHistory.setString(2, t.name());
+                            insertNameHistory.setLong(3, t.changedAt());
+                            insertNameHistory.addBatch();
+                            insertNameHistoryCount++;
+                        }
+                        case DbTask.ResetAllPlayersOfflineTask t -> resetAllOfflineRequested = true;
                     }
                 }
 
@@ -160,6 +203,10 @@ final class DbWriterThread extends Thread {
                 if (alertCount > 0) alerts.executeBatch();
                 if (markDestroyedCount > 0) markDestroyed.executeBatch();
                 if (updateKindCount > 0) updateKind.executeBatch();
+                if (upsertPlayerCount > 0) upsertPlayer.executeBatch();
+                if (setPlayerOfflineCount > 0) setPlayerOffline.executeBatch();
+                if (insertNameHistoryCount > 0) insertNameHistory.executeBatch();
+                if (resetAllOfflineRequested) resetAllOffline.executeUpdate();
 
                 connection.commit();
             } catch (SQLException e) {
@@ -183,6 +230,7 @@ final class DbWriterThread extends Thread {
         setNullableInt(ps, 7, t.z());
         ps.setString(8, t.playerUuid());
         ps.setString(9, t.detailJson());
+        ps.setString(10, t.gamemode());
     }
 
     private static void bindUnit(PreparedStatement ps, DbTask.UpsertTrackedUnitTask t) throws SQLException {

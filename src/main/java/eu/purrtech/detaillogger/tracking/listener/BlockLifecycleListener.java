@@ -96,7 +96,7 @@ public final class BlockLifecycleListener implements Listener {
         for (Block block : blocks) {
             BlockTrackingService.TrackedBlock tracked = blockTracking.readTracked(block);
             if (tracked != null) {
-                blockTracking.markDestroyed(tracked.uuid(), "EXPLOSION", block);
+                blockTracking.markDestroyed(tracked.uuid(), "EXPLOSION", block, null);
             }
         }
     }

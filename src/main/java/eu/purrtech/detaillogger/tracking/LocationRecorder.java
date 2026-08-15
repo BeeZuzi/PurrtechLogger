@@ -45,6 +45,7 @@ final class LocationRecorder {
         }
 
         eventDao.enqueue(uuid.toString(), eventType, now, eventWorld, eventX, eventY, eventZ,
-                actor != null ? actor.getUniqueId().toString() : null, null);
+                actor != null ? actor.getUniqueId().toString() : null, null,
+                actor != null ? actor.getGameMode().name() : null);
     }
 }

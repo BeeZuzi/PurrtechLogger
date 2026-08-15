@@ -5,11 +5,13 @@ import eu.purrtech.detaillogger.db.dao.DupeAlertDao;
 import eu.purrtech.detaillogger.db.dao.DupeAlertRecord;
 import eu.purrtech.detaillogger.db.dao.EventDao;
 import eu.purrtech.detaillogger.db.dao.EventRecord;
+import eu.purrtech.detaillogger.db.dao.PlayerRecord;
 import eu.purrtech.detaillogger.db.dao.TrackedUnitDao;
 import eu.purrtech.detaillogger.db.dao.TrackedUnitRecord;
 import eu.purrtech.detaillogger.gui.AdminGuiService;
 import eu.purrtech.detaillogger.template.TemplateRegistry;
 import eu.purrtech.detaillogger.tracking.HistoryService;
+import eu.purrtech.detaillogger.tracking.PlayerDirectoryService;
 import eu.purrtech.detaillogger.tracking.ReconciliationSweepTask;
 import io.papermc.paper.command.brigadier.BasicCommand;
 import io.papermc.paper.command.brigadier.CommandSourceStack;
@@ -53,11 +55,12 @@ public final class PurrLogCommand implements BasicCommand {
     private final DupeAlertDao dupeAlertDao;
     private final ReconciliationSweepTask sweepTask;
     private final AdminGuiService adminGuiService;
+    private final PlayerDirectoryService playerDirectory;
 
     public PurrLogCommand(DetailLoggerPlugin plugin, TrackedUnitDao trackedUnitDao, EventDao eventDao,
                            TemplateRegistry templateRegistry, File templatesFile, HistoryService historyService,
                            DupeAlertDao dupeAlertDao, ReconciliationSweepTask sweepTask,
-                           AdminGuiService adminGuiService) {
+                           AdminGuiService adminGuiService, PlayerDirectoryService playerDirectory) {
         this.plugin = plugin;
         this.trackedUnitDao = trackedUnitDao;
         this.eventDao = eventDao;
@@ -67,6 +70,7 @@ public final class PurrLogCommand implements BasicCommand {
         this.dupeAlertDao = dupeAlertDao;
         this.sweepTask = sweepTask;
         this.adminGuiService = adminGuiService;
+        this.playerDirectory = playerDirectory;
     }
 
     @Override
@@ -107,6 +111,14 @@ public final class PurrLogCommand implements BasicCommand {
             runDbTest(sender);
             return;
         }
+        if (args.length == 1 && args[0].equalsIgnoreCase("players")) {
+            runPlayers(sender);
+            return;
+        }
+        if (args.length == 2 && args[0].equalsIgnoreCase("player")) {
+            runPlayer(sender, args[1]);
+            return;
+        }
         sendHelp(sender);
     }
 
@@ -115,10 +127,62 @@ public final class PurrLogCommand implements BasicCommand {
         sender.sendMessage("/purrlog gui - otevri admin GUI (vyzaduje DisplayGUI)");
         sender.sendMessage("/purrlog history <uuid> - historie sledovane jednotky");
         sender.sendMessage("/purrlog alerts - nevyresene dupe alerty");
+        sender.sendMessage("/purrlog players - seznam vsech hracu, co se kdy pripojili");
+        sender.sendMessage("/purrlog player <nick|uuid> - profil a UUID konkretniho hrace");
         sender.sendMessage("/purrlog sweep - rucne spusti reconciliation sweep");
         sender.sendMessage("/purrlog reload - znovu nacte templates.yml");
         sender.sendMessage("/purrlog template import <klic> - vytvori sablonu z drzeneho itemu");
         sender.sendMessage("/purrlog dbtest - overi DB potrubi zapisem/ctenim testovaciho zaznamu");
+    }
+
+    private void runPlayers(CommandSender sender) {
+        Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+            try {
+                List<PlayerRecord> players = playerDirectory.listPlayers();
+                Bukkit.getScheduler().runTask(plugin, () -> reportPlayers(sender, players));
+            } catch (Exception e) {
+                plugin.getLogger().severe("players lookup selhal: " + e);
+                Bukkit.getScheduler().runTask(plugin, () -> sender.sendMessage("Lookup selhal, viz konzole."));
+            }
+        });
+    }
+
+    private void reportPlayers(CommandSender sender, List<PlayerRecord> players) {
+        if (players.isEmpty()) {
+            sender.sendMessage("Zatim se nikdo nepripojil.");
+            return;
+        }
+        int shown = Math.min(players.size(), 30);
+        sender.sendMessage("Hraci (" + shown + "/" + players.size() + "):");
+        for (PlayerRecord p : players.subList(0, shown)) {
+            sender.sendMessage(" - " + (p.online() ? "[ONLINE] " : "[OFFLINE] ") + p.currentName()
+                    + " uuid=" + p.uuid());
+        }
+    }
+
+    private void runPlayer(CommandSender sender, String query) {
+        Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+            try {
+                List<PlayerRecord> matches = playerDirectory.searchPlayers(query);
+                Bukkit.getScheduler().runTask(plugin, () -> reportPlayer(sender, query, matches));
+            } catch (Exception e) {
+                plugin.getLogger().severe("player lookup selhal: " + e);
+                Bukkit.getScheduler().runTask(plugin, () -> sender.sendMessage("Lookup selhal, viz konzole."));
+            }
+        });
+    }
+
+    private void reportPlayer(CommandSender sender, String query, List<PlayerRecord> matches) {
+        if (matches.isEmpty()) {
+            sender.sendMessage("Zadny hrac neodpovida '" + query + "'.");
+            return;
+        }
+        for (PlayerRecord p : matches) {
+            sender.sendMessage("=== " + p.currentName() + " ===");
+            sender.sendMessage("UUID: " + p.uuid());
+            sender.sendMessage((p.online() ? "Stav: ONLINE" : "Stav: OFFLINE") + ", prvni pripojeni "
+                    + formatTime(p.firstJoinedAt()));
+        }
     }
 
     private void runGui(CommandSender sender) {

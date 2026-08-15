@@ -3,9 +3,11 @@ package eu.purrtech.detaillogger.gui;
 import eu.purrtech.detaillogger.db.dao.DupeAlertDao;
 import eu.purrtech.detaillogger.db.dao.DupeAlertRecord;
 import eu.purrtech.detaillogger.db.dao.EventRecord;
+import eu.purrtech.detaillogger.db.dao.PlayerRecord;
 import eu.purrtech.detaillogger.db.dao.TemplateDao;
 import eu.purrtech.detaillogger.db.dao.TrackedUnitRecord;
 import eu.purrtech.detaillogger.tracking.HistoryService;
+import eu.purrtech.detaillogger.tracking.PlayerDirectoryService;
 import eu.purrtech.displaygui.API.PageType;
 import eu.purrtech.displaygui.API.data.buttonData.ButtonData;
 import eu.purrtech.displaygui.API.data.buttonData.ItemButtonData;
@@ -35,9 +37,10 @@ import eu.purrtech.displaygui.API.DisplayGuiAPI;
 import java.sql.SQLException;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
-import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Consumer;
@@ -58,28 +61,35 @@ public final class AdminGuiService implements Listener {
     private static final Color BUTTON_BACKGROUND = Color.fromARGB(230, 40, 40, 40);
     private static final Color PANEL_BACKGROUND = Color.fromARGB(210, 25, 25, 25);
     private static final double MENU_DISTANCE_PIXELS = 80;
+    private static final int PLAYERS_PAGE_SIZE = 6;
+
+    private enum SearchMode { ITEM, PLAYER }
 
     private final HistoryService historyService;
     private final TemplateDao templateDao;
     private final DupeAlertDao dupeAlertDao;
+    private final PlayerDirectoryService playerDirectory;
     private final Plugin plugin;
     private final Logger logger;
-    private final Set<UUID> awaitingSearchInput = ConcurrentHashMap.newKeySet();
+    private final Map<UUID, SearchMode> awaitingSearchInput = new ConcurrentHashMap<>();
 
     public AdminGuiService(HistoryService historyService, TemplateDao templateDao, DupeAlertDao dupeAlertDao,
-                            Plugin plugin, Logger logger) {
+                            PlayerDirectoryService playerDirectory, Plugin plugin, Logger logger) {
         this.historyService = historyService;
         this.templateDao = templateDao;
         this.dupeAlertDao = dupeAlertDao;
+        this.playerDirectory = playerDirectory;
         this.plugin = plugin;
         this.logger = logger;
     }
 
     public void openMainMenu(Player player) {
         List<ButtonData> buttons = new ArrayList<>();
+        buttons.add(navButton("players", -1.5, -0.6, 0.04, "Hraci", e -> openPlayerList(player, 0)));
         buttons.add(navButton("search", -1.5, -1.2, 0.04, "Hledat podle UUID", e -> beginSearch(player)));
         buttons.add(navButton("alerts", -1.5, -1.8, 0.05, "Nevyresene alerty", e -> openAlerts(player)));
         buttons.add(navButton("close", -1.5, -2.4, 0.05, "Zavrit", e -> DisplayGuiAPI.closeMenu(player)));
+        buttons.add(navButton("player-search", -1.5, -3.0, 0.05, "Hledat hrace", e -> beginPlayerSearch(player)));
 
         ScreenPageData screen = new ScreenPageData(backgroundPage(), buttons, "purrtechlog:main", MENU_DISTANCE_PIXELS);
 //        DisplayGuiAPI.closeMenu(player);
@@ -87,15 +97,22 @@ public final class AdminGuiService implements Listener {
     }
 
     private void beginSearch(Player player) {
-        awaitingSearchInput.add(player.getUniqueId());
+        awaitingSearchInput.put(player.getUniqueId(), SearchMode.ITEM);
         DisplayGuiAPI.closeMenu(player);
         player.sendMessage("Napis do chatu UUID hledaneho itemu (nebo 'zrusit').");
+    }
+
+    private void beginPlayerSearch(Player player) {
+        awaitingSearchInput.put(player.getUniqueId(), SearchMode.PLAYER);
+        DisplayGuiAPI.closeMenu(player);
+        player.sendMessage("Napis do chatu nick nebo UUID hledaneho hrace (nebo 'zrusit').");
     }
 
     @EventHandler
     public void onChat(AsyncChatEvent event) {
         Player player = event.getPlayer();
-        if (!awaitingSearchInput.remove(player.getUniqueId())) {
+        SearchMode mode = awaitingSearchInput.remove(player.getUniqueId());
+        if (mode == null) {
             return;
         }
         event.setCancelled(true);
@@ -105,7 +122,11 @@ public final class AdminGuiService implements Listener {
                 player.sendMessage("Hledani zruseno.");
                 return;
             }
-            openDetail(player, raw);
+            if (mode == SearchMode.ITEM) {
+                openDetail(player, raw);
+            } else {
+                openPlayerSearch(player, raw);
+            }
         });
     }
 
@@ -207,6 +228,135 @@ public final class AdminGuiService implements Listener {
 
         ScreenPageData screen = new ScreenPageData(backgroundPage(), buttons, "purrtechlog:alerts", MENU_DISTANCE_PIXELS);
 //        DisplayGuiAPI.closeMenu(player);
+        DisplayGuiAPI.openMenu(player, screen);
+    }
+
+    public void openPlayerList(Player player, int offset) {
+        Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+            try {
+                List<PlayerRecord> all = playerDirectory.listPlayers();
+                Bukkit.getScheduler().runTask(plugin, () -> openPlayerListPage(player, all, offset, null));
+            } catch (SQLException e) {
+                logger.severe("Admin GUI nacteni seznamu hracu selhalo: " + e);
+                Bukkit.getScheduler().runTask(plugin, () -> player.sendMessage("Lookup selhal, viz konzole."));
+            }
+        });
+    }
+
+    private void openPlayerSearch(Player player, String query) {
+        Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+            try {
+                List<PlayerRecord> results = playerDirectory.searchPlayers(query);
+                Bukkit.getScheduler().runTask(plugin, () -> {
+                    if (results.isEmpty()) {
+                        player.sendMessage("Zadny hrac neodpovida '" + query + "'.");
+                        return;
+                    }
+                    if (results.size() == 1) {
+                        openPlayerDetail(player, results.get(0).uuid());
+                        return;
+                    }
+                    openPlayerListPage(player, results, 0, query);
+                });
+            } catch (SQLException e) {
+                logger.severe("Admin GUI hledani hrace selhalo: " + e);
+                Bukkit.getScheduler().runTask(plugin, () -> player.sendMessage("Lookup selhal, viz konzole."));
+            }
+        });
+    }
+
+    private void openPlayerListPage(Player player, List<PlayerRecord> all, int offset, String searchQuery) {
+        int clampedOffset = all.isEmpty() ? 0 : Math.max(0, Math.min(offset, all.size() - 1));
+        int end = Math.min(clampedOffset + PLAYERS_PAGE_SIZE, all.size());
+        List<PlayerRecord> page = all.subList(clampedOffset, end);
+
+        List<ButtonData> buttons = new ArrayList<>();
+        double y = 1.5;
+        for (PlayerRecord p : page) {
+            String status = p.online() ? "[ONLINE] " : "[OFFLINE] ";
+            String suffix = p.online() ? "" : " (naposledy " + formatTime(p.lastSeenAt()) + ")";
+            String label = status + p.currentName() + suffix;
+            buttons.add(navButton("player-" + p.uuid(), -1.5, y, 0.05, label, e -> openPlayerDetail(player, p.uuid())));
+            y -= 0.6;
+        }
+
+        List<String> infoLines = new ArrayList<>();
+        infoLines.add(searchQuery != null ? "Vysledky hledani: '" + searchQuery + "'" : "Vsichni hraci");
+        infoLines.add(all.isEmpty() ? "0 hracu" : (clampedOffset + 1) + "-" + end + " z " + all.size());
+        buttons.add(infoTextButton(-1.5, 2.1, 0.04, infoLines));
+
+        if (clampedOffset > 0) {
+            buttons.add(navButton("prev", -2.7, y - 0.3, 0.05, "Predchozi",
+                    e -> openPlayerListPage(player, all, clampedOffset - PLAYERS_PAGE_SIZE, searchQuery)));
+        }
+        if (end < all.size()) {
+            buttons.add(navButton("next", -0.3, y - 0.3, 0.05, "Dalsi",
+                    e -> openPlayerListPage(player, all, clampedOffset + PLAYERS_PAGE_SIZE, searchQuery)));
+        }
+        buttons.add(navButton("back", -1.5, y - 0.9, 0.05, "Hlavni menu", e -> openMainMenu(player)));
+
+        ScreenPageData screen = new ScreenPageData(backgroundPage(), buttons, "purrtechlog:players:" + clampedOffset, MENU_DISTANCE_PIXELS);
+        DisplayGuiAPI.openMenu(player, screen);
+    }
+
+    public void openPlayerDetail(Player player, String targetUuid) {
+        Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+            try {
+                Optional<PlayerDirectoryService.PlayerProfile> found = playerDirectory.lookupPlayer(targetUuid);
+                if (found.isEmpty()) {
+                    Bukkit.getScheduler().runTask(plugin, () -> player.sendMessage("Hrac s UUID '" + targetUuid + "' neni znam."));
+                    return;
+                }
+                PlayerDirectoryService.PlayerActivity activity = playerDirectory.findActivity(targetUuid, 100);
+                Bukkit.getScheduler().runTask(plugin, () -> openPlayerDetailPage(player, found.get(), activity));
+            } catch (SQLException e) {
+                logger.severe("Admin GUI detail hrace selhal: " + e);
+                Bukkit.getScheduler().runTask(plugin, () -> player.sendMessage("Lookup selhal, viz konzole."));
+            }
+        });
+    }
+
+    private void openPlayerDetailPage(Player player, PlayerDirectoryService.PlayerProfile profile,
+                                       PlayerDirectoryService.PlayerActivity activity) {
+        PlayerRecord unit = profile.player();
+
+        List<String> infoLines = new ArrayList<>();
+        infoLines.add("Nick: " + unit.currentName());
+        infoLines.add("UUID: " + unit.uuid());
+        infoLines.add(unit.online() ? "Stav: ONLINE" : "Stav: OFFLINE (naposledy " + formatTime(unit.lastSeenAt()) + ")");
+        infoLines.add("Prvni pripojeni: " + formatTime(unit.firstJoinedAt()));
+        String priorNames = profile.nameHistory().stream()
+                .map(n -> n.name() + " (" + formatTime(n.changedAt()) + ")")
+                .reduce((a, b) -> a + ", " + b)
+                .orElse("zadne");
+        infoLines.add("Predchozi nicky: " + priorNames);
+
+        record ActivityLine(long timestamp, String text) {
+        }
+        List<ActivityLine> lines = new ArrayList<>();
+        for (EventRecord e : activity.events()) {
+            String where = e.world() != null ? " @ " + e.world() + " " + e.x() + "," + e.y() + "," + e.z() : "";
+            String gamemode = e.gamemode() != null ? " gamemode=" + e.gamemode() : "";
+            String tag = e.eventType().equals("CREATIVE_DUPLICATE") ? "[DUPE-CREATIVE] " : "";
+            lines.add(new ActivityLine(e.timestamp(),
+                    formatTime(e.timestamp()) + " " + tag + e.eventType() + where + gamemode));
+        }
+        for (DupeAlertRecord a : activity.alerts()) {
+            lines.add(new ActivityLine(a.detectedAt(),
+                    formatTime(a.detectedAt()) + " [DUPE-BUG] [" + a.severity() + "] " + a.note()
+                            + " uuid=" + a.unitUuid()));
+        }
+        List<String> activityLines = lines.stream()
+                .sorted(Comparator.comparingLong(ActivityLine::timestamp).reversed())
+                .map(ActivityLine::text)
+                .toList();
+
+        List<ButtonData> buttons = new ArrayList<>();
+        buttons.add(infoTextButton(-0, 1.0, 0.05, infoLines));
+        buttons.add(scrollListButton("activity", -3, -1, 0.05, activityLines, "(zadna aktivita)"));
+        buttons.add(navButton("back", -1.5, -2, -0.05, "Zpet", e -> openMainMenu(player)));
+
+        ScreenPageData screen = new ScreenPageData(backgroundPage(), buttons, "purrtechlog:player:" + unit.uuid(), MENU_DISTANCE_PIXELS);
         DisplayGuiAPI.openMenu(player, screen);
     }
 

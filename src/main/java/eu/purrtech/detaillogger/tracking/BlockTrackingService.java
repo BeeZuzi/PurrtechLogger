@@ -127,12 +127,14 @@ public final class BlockTrackingService {
         return drop;
     }
 
-    public void markDestroyed(UUID uuid, String cause, Block block) {
+    public void markDestroyed(UUID uuid, String cause, Block block, Player actor) {
         untagBlock(block);
         long now = System.currentTimeMillis();
         trackedUnitDao.enqueueMarkDestroyed(uuid.toString(), now, cause);
         eventDao.enqueue(uuid.toString(), "DESTROYED", now, block.getWorld().getName(),
-                block.getX(), block.getY(), block.getZ(), null, jsonField("cause", cause));
+                block.getX(), block.getY(), block.getZ(),
+                actor != null ? actor.getUniqueId().toString() : null, jsonField("cause", cause),
+                actor != null ? actor.getGameMode().name() : null);
     }
 
     /** Relocates a plain (non-TileState) tracked block, e.g. pushed by a piston. */

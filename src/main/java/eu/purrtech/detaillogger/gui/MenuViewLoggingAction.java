@@ -35,7 +35,8 @@ public final class MenuViewLoggingAction {
             Location loc = player.getLocation();
             String detail = "{\"template_key\":\"" + escape(templateKey) + "\"}";
             eventDao.enqueue(null, "VIEWED_IN_MENU", now, loc.getWorld().getName(),
-                    loc.getBlockX(), loc.getBlockY(), loc.getBlockZ(), player.getUniqueId().toString(), detail);
+                    loc.getBlockX(), loc.getBlockY(), loc.getBlockZ(), player.getUniqueId().toString(), detail,
+                    player.getGameMode().name());
         });
     }
 

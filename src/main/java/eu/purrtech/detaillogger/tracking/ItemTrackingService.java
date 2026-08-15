@@ -235,7 +235,8 @@ public final class ItemTrackingService {
                 location != null ? location.getBlockY() : null,
                 location != null ? location.getBlockZ() : null,
                 actor != null ? actor.getUniqueId().toString() : null,
-                jsonField("cause", cause));
+                jsonField("cause", cause),
+                actor != null ? actor.getGameMode().name() : null);
     }
 
     /** Same as {@link #markDestroyed} but for every unit in a (possibly merged) stack at once. */

@@ -8,7 +8,7 @@ public sealed interface DbTask {
 
     record InsertEventTask(String unitUuid, String eventType, long timestamp, String world,
                             Integer x, Integer y, Integer z, String playerUuid,
-                            String detailJson) implements DbTask {
+                            String detailJson, String gamemode) implements DbTask {
     }
 
     record UpsertTrackedUnitTask(String uuid, int templateId, String kind, String origin,
@@ -46,5 +46,22 @@ public sealed interface DbTask {
      * broken back into an item), without disturbing its other fields.
      */
     record UpdateUnitKindTask(String uuid, String kind) implements DbTask {
+    }
+
+    /**
+     * Upsert on join: first_joined_at/last_seen_at are intentionally left out of the
+     * ON CONFLICT SET clause so they survive across joins (see the writer's bound SQL).
+     */
+    record UpsertPlayerTask(String uuid, String name, long joinedAt, boolean online) implements DbTask {
+    }
+
+    record SetPlayerOfflineTask(String uuid, long lastSeenAt) implements DbTask {
+    }
+
+    record InsertNameHistoryTask(String playerUuid, String name, long changedAt) implements DbTask {
+    }
+
+    /** Startup safety net against "online" rows left behind by an unclean shutdown. */
+    record ResetAllPlayersOfflineTask() implements DbTask {
     }
 }

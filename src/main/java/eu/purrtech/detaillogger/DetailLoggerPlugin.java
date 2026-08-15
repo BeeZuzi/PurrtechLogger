@@ -5,6 +5,7 @@ import eu.purrtech.detaillogger.db.Database;
 import eu.purrtech.detaillogger.db.dao.DupeAlertDao;
 import eu.purrtech.detaillogger.db.dao.EventDao;
 import eu.purrtech.detaillogger.db.dao.LocationDao;
+import eu.purrtech.detaillogger.db.dao.PlayerDao;
 import eu.purrtech.detaillogger.db.dao.TemplateDao;
 import eu.purrtech.detaillogger.db.dao.TrackedUnitDao;
 import eu.purrtech.detaillogger.gui.AdminGuiService;
@@ -15,6 +16,7 @@ import eu.purrtech.detaillogger.tracking.BlockIdentityIndex;
 import eu.purrtech.detaillogger.tracking.BlockTrackingService;
 import eu.purrtech.detaillogger.tracking.HistoryService;
 import eu.purrtech.detaillogger.tracking.ItemTrackingService;
+import eu.purrtech.detaillogger.tracking.PlayerDirectoryService;
 import eu.purrtech.detaillogger.tracking.ReconciliationSweepTask;
 import eu.purrtech.detaillogger.tracking.listener.BlockLifecycleListener;
 import eu.purrtech.detaillogger.tracking.listener.ChunkIndexListener;
@@ -22,6 +24,7 @@ import eu.purrtech.detaillogger.tracking.listener.ContainerListener;
 import eu.purrtech.detaillogger.tracking.listener.ItemDestructionListener;
 import eu.purrtech.detaillogger.tracking.listener.ItemLifecycleListener;
 import eu.purrtech.detaillogger.tracking.listener.PlayerJoinScanListener;
+import eu.purrtech.detaillogger.tracking.listener.PlayerPresenceListener;
 import eu.purrtech.detaillogger.tracking.listener.ShulkerNestingListener;
 import eu.purrtech.detaillogger.tracking.pdc.TrackedBlockTag;
 import eu.purrtech.detaillogger.tracking.pdc.TrackedEntityTag;
@@ -53,6 +56,7 @@ public final class DetailLoggerPlugin extends JavaPlugin {
         EventDao eventDao = new EventDao(database);
         LocationDao locationDao = new LocationDao(database);
         TemplateDao templateDao = new TemplateDao(database);
+        PlayerDao playerDao = new PlayerDao(database);
         templateRegistry = new TemplateRegistry(templatesFile, templateDao, getLogger());
 
         TrackedItemTag itemTag = new TrackedItemTag(this);
@@ -68,8 +72,15 @@ public final class DetailLoggerPlugin extends JavaPlugin {
         DupeAlertDao dupeAlertDao = new DupeAlertDao(database);
         ReconciliationSweepTask sweepTask = new ReconciliationSweepTask(
                 itemTracking, trackedUnitDao, dupeAlertDao, templateRegistry, this, getLogger());
+        PlayerDirectoryService playerDirectory = new PlayerDirectoryService(
+                playerDao, eventDao, dupeAlertDao, this, getLogger());
+
+        // Safety net against "online" rows left behind by an unclean shutdown - anyone genuinely
+        // online will re-fire PlayerJoinEvent once the server (and thus this listener) restarts.
+        playerDao.enqueueResetAllOffline();
 
         getServer().getPluginManager().registerEvents(new PlayerJoinScanListener(itemTracking), this);
+        getServer().getPluginManager().registerEvents(new PlayerPresenceListener(playerDirectory), this);
         getServer().getPluginManager().registerEvents(new ItemLifecycleListener(itemTracking), this);
         getServer().getPluginManager().registerEvents(new ItemDestructionListener(itemTracking), this);
         getServer().getPluginManager().registerEvents(new ContainerListener(itemTracking, this), this);
@@ -77,10 +88,11 @@ public final class DetailLoggerPlugin extends JavaPlugin {
         getServer().getPluginManager().registerEvents(new ChunkIndexListener(blockIndex, locationDao, this), this);
         getServer().getPluginManager().registerEvents(new BlockLifecycleListener(blockTracking, entityTag, this), this);
 
-        AdminGuiService adminGuiService = setupDisplayGuiIntegration(templateDao, eventDao, dupeAlertDao, historyService);
+        AdminGuiService adminGuiService = setupDisplayGuiIntegration(
+                templateDao, eventDao, dupeAlertDao, historyService, playerDirectory);
 
         var purrLogCommand = new PurrLogCommand(this, trackedUnitDao, eventDao, templateRegistry,
-                templatesFile, historyService, dupeAlertDao, sweepTask, adminGuiService);
+                templatesFile, historyService, dupeAlertDao, sweepTask, adminGuiService, playerDirectory);
         registerCommand("purrlog", "PurrTechDetailLogger admin/debug command", purrLogCommand);
 
         Bukkit.getScheduler().runTaskAsynchronously(this, () -> {
@@ -111,12 +123,14 @@ public final class DetailLoggerPlugin extends JavaPlugin {
      * when it isn't installed - only this one guarded call site constructs them.
      */
     private AdminGuiService setupDisplayGuiIntegration(TemplateDao templateDao, EventDao eventDao,
-                                                         DupeAlertDao dupeAlertDao, HistoryService historyService) {
+                                                         DupeAlertDao dupeAlertDao, HistoryService historyService,
+                                                         PlayerDirectoryService playerDirectory) {
         if (!getServer().getPluginManager().isPluginEnabled("PurrTechDisplayGUI")) {
             getLogger().info("PurrTechDisplayGUI nenalezeno - admin GUI (/purrlog gui) a [purrtechlog] akce nejsou k dispozici.");
             return null;
         }
-        AdminGuiService adminGuiService = new AdminGuiService(historyService, templateDao, dupeAlertDao, this, getLogger());
+        AdminGuiService adminGuiService = new AdminGuiService(
+                historyService, templateDao, dupeAlertDao, playerDirectory, this, getLogger());
         getServer().getPluginManager().registerEvents(adminGuiService, this);
         MenuViewLoggingAction.register(eventDao);
         getLogger().info("DisplayGUI integrace aktivni (/purrlog gui, [purrtechlog] akce).");

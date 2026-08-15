@@ -18,7 +18,7 @@ import java.util.logging.Logger;
  */
 final class SchemaMigrator {
 
-    private static final List<String> MIGRATIONS = List.of("V1__init.sql");
+    private static final List<String> MIGRATIONS = List.of("V1__init.sql", "V2__players.sql");
 
     private final Connection connection;
     private final Logger logger;

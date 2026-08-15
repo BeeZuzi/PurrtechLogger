@@ -10,6 +10,7 @@ public record EventRecord(
         Integer y,
         Integer z,
         String playerUuid,
-        String detail
+        String detail,
+        String gamemode
 ) {
 }
