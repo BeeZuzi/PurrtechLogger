@@ -2,6 +2,7 @@ package eu.purrtech.detaillogger.tracking.listener;
 
 import eu.purrtech.detaillogger.tracking.ItemTrackingService;
 import eu.purrtech.detaillogger.tracking.LocationContext;
+import eu.purrtech.detaillogger.tracking.StackMath;
 import org.bukkit.entity.Item;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
@@ -21,7 +22,7 @@ import java.util.UUID;
  * pickups (chest/barrel/shulker) and precise slot tracking land with container support; this
  * phase only tracks "picked up by a player" without a specific slot. Since every tracked item's
  * PDC is unique, vanilla can never auto-stack two of them together on its own - {@link #onPickup}
- * builds that merge by hand (see {@link #tryMergeIntoExistingStack}), mirroring
+ * builds that merge by hand (see {@link #mergeIntoExistingStacks}), mirroring
  * {@code ContainerListener#tryMerge}'s manual-combine approach for the in-inventory case.
  */
 public final class ItemLifecycleListener implements Listener {
@@ -78,18 +79,27 @@ public final class ItemLifecycleListener implements Listener {
         }
         entity.setItemStack(item);
 
-        if (tryMergeIntoExistingStack(player, item, units)) {
+        List<UUID> remaining = mergeIntoExistingStacks(player, item, units);
+        if (remaining.isEmpty()) {
             // Handled entirely by hand: vanilla can't do this part itself (see the method doc),
             // so we take over placement and removal instead of letting the event resolve normally.
             event.setCancelled(true);
             entity.remove();
             return;
         }
+        if (remaining.size() < units.size()) {
+            // Partially absorbed into one or more existing stacks - shrink the ground item to
+            // just what's left and let vanilla place that remainder into a fresh slot as normal.
+            String templateKey = tracking.readTemplateKey(item);
+            item.setAmount(remaining.size());
+            tracking.writeMergedUnits(item, remaining, templateKey);
+            entity.setItemStack(item);
+        }
 
         // Slot isn't known at pickup time - Bukkit merges it into the inventory after this event
         // fires. Recorded without a slot; ContainerListener's InventoryOpenEvent/click scans (or
         // the next PlayerJoinEvent) reconcile the exact slot once the player next interacts.
-        tracking.recordLocationForAll(units, LocationContext.playerInventory(player, -1), "PICKED_UP", player);
+        tracking.recordLocationForAll(remaining, LocationContext.playerInventory(player, -1), "PICKED_UP", player);
     }
 
     /**
@@ -97,19 +107,20 @@ public final class ItemLifecycleListener implements Listener {
      * "similar" to Bukkit - every unit's PDC is unique by design - so vanilla's own pickup logic
      * always lands a newly-picked-up tracked item in a fresh slot instead of stacking it onto a
      * matching tracked stack already in the inventory, even though they're the same item in every
-     * way that matters to the player. This detects that case and builds the merge by hand, mirroring
-     * {@code ContainerListener#tryMerge}. Simplification matching the rest of the stacking model:
-     * only merges into a single slot with room for the whole pickup; partial merges across several
-     * partially-filled stacks aren't attempted. Returns true if it placed the merged stack (caller
-     * is responsible for cancelling the pickup event and removing the ground entity).
+     * way that matters to the player. This detects that case and builds the merge by hand,
+     * spreading across as many existing same-template stacks as it takes (not just one), mirroring
+     * {@code ContainerListener#tryMerge}/{@code #consolidate}. Returns whatever units couldn't be
+     * absorbed anywhere (empty if the whole pickup was merged away).
      */
-    private boolean tryMergeIntoExistingStack(Player player, ItemStack picked, List<UUID> pickedUnits) {
+    private List<UUID> mergeIntoExistingStacks(Player player, ItemStack picked, List<UUID> pickedUnits) {
         String templateKey = tracking.readTemplateKey(picked);
         if (templateKey == null) {
-            return false;
+            return pickedUnits;
         }
         ItemStack[] storage = player.getInventory().getStorageContents();
-        for (int slot = 0; slot < storage.length; slot++) {
+        List<UUID> remaining = pickedUnits;
+
+        for (int slot = 0; slot < storage.length && !remaining.isEmpty(); slot++) {
             ItemStack existing = storage[slot];
             if (existing == null || existing.getType() != picked.getType()) {
                 continue;
@@ -118,24 +129,31 @@ public final class ItemLifecycleListener implements Listener {
             if (existingUnits.isEmpty() || !templateKey.equals(tracking.readTemplateKey(existing))) {
                 continue;
             }
-            int combined = existingUnits.size() + pickedUnits.size();
-            if (combined > existing.getMaxStackSize()) {
-                continue; // wouldn't fit - documented limitation, no partial-merge support
+
+            StackMath.MergeResult sliced = StackMath.mergeUnits(
+                    toStrings(existingUnits), toStrings(remaining), existing.getMaxStackSize(), remaining.size());
+            if (sliced.destination().size() == existingUnits.size()) {
+                continue; // this slot's already full - try the next one
             }
 
-            List<UUID> merged = new ArrayList<>(combined);
-            merged.addAll(existingUnits);
-            merged.addAll(pickedUnits);
-
+            List<UUID> newExistingUnits = toUuids(sliced.destination());
             ItemStack mergedStack = existing.clone();
-            mergedStack.setAmount(combined);
-            tracking.writeMergedUnits(mergedStack, merged, templateKey);
+            mergedStack.setAmount(newExistingUnits.size());
+            tracking.writeMergedUnits(mergedStack, newExistingUnits, templateKey);
             player.getInventory().setItem(slot, mergedStack);
+            tracking.recordLocationForAll(newExistingUnits, LocationContext.playerInventory(player, slot), "MERGED", player);
 
-            tracking.recordLocationForAll(merged, LocationContext.playerInventory(player, slot), "MERGED", player);
-            return true;
+            remaining = toUuids(sliced.source());
         }
-        return false;
+        return remaining;
+    }
+
+    private static List<String> toStrings(List<UUID> uuids) {
+        return uuids.stream().map(UUID::toString).toList();
+    }
+
+    private static List<UUID> toUuids(List<String> strings) {
+        return strings.stream().map(UUID::fromString).toList();
     }
 
     @EventHandler

@@ -57,4 +57,38 @@ public final class StackMath {
         }
         return result;
     }
+
+    /**
+     * @param destination     units already on the merge target
+     * @param source          units being offered to it, front of the list first
+     * @param destinationCap  the target's max stack size
+     * @param transferLimit   the most units this particular interaction is allowed to move (e.g.
+     *                        1 for a vanilla right-click place, or {@code source.size()} for a
+     *                        left-click/full move) - independent of how much room is actually left
+     */
+    public record MergeResult(List<String> destination, List<String> source) {
+    }
+
+    /**
+     * Two physically identical tracked stacks (same template, different UUID) never look
+     * "similar" to Bukkit - every unit's PDC is unique by design - so vanilla can never merge them
+     * on its own, whether they fit into one stack or not. This is the pure slicing math behind
+     * every hand-built merge in this plugin (direct click, pickup, cursor-gather, inventory
+     * consolidation): move as many units as fit - capped by both the destination's remaining room
+     * and {@code transferLimit} - from the front of {@code source} onto the end of
+     * {@code destination}, leaving the rest on {@code source}. Never loses a unit regardless of
+     * whether everything fits, nothing fits, or only part of it does.
+     */
+    public static MergeResult mergeUnits(List<String> destination, List<String> source,
+                                          int destinationCap, int transferLimit) {
+        int room = destinationCap - destination.size();
+        int transfer = Math.max(0, Math.min(Math.min(room, transferLimit), source.size()));
+
+        List<String> newDestination = new ArrayList<>(destination.size() + transfer);
+        newDestination.addAll(destination);
+        newDestination.addAll(source.subList(0, transfer));
+
+        List<String> remainingSource = new ArrayList<>(source.subList(transfer, source.size()));
+        return new MergeResult(newDestination, remainingSource);
+    }
 }

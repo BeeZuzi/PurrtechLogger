@@ -2,6 +2,7 @@ package eu.purrtech.detaillogger.tracking.listener;
 
 import eu.purrtech.detaillogger.tracking.ItemTrackingService;
 import eu.purrtech.detaillogger.tracking.LocationContext;
+import eu.purrtech.detaillogger.tracking.StackMath;
 import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
@@ -22,7 +23,9 @@ import org.bukkit.inventory.ItemStack;
 import org.bukkit.plugin.Plugin;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -48,6 +51,17 @@ import java.util.UUID;
  * and a hopper pulling a partial amount out of an existing merged stack (hopper reconciliation
  * here only tracks where the moved unit(s) ended up, not whether the source stack was correctly
  * de-duplicated afterward).
+ * <p>
+ * Two physically identical tracked stacks (same template, different UUID) never look "similar" to
+ * Bukkit - every unit's PDC is unique by design - so vanilla can never stack, gather, or quick-move
+ * them into each other on its own. Every place a vanilla shortcut would normally rely on that
+ * similarity check is handled here by hand instead: {@link #tryMerge} for a direct click onto an
+ * existing stack (now with proper partial-merge support - see {@link StackMath#mergeUnits}, fixing
+ * an earlier bug where a stack that didn't fully fit fell through to vanilla's swap and looked like
+ * it vanished), {@link #tryGatherOntoCursor} for double-click's "collect all matching items", and
+ * {@link #consolidate} for everything else (shift-click, hopper transfers, drags) - run as a
+ * general sweep after any inventory action instead of trying to replicate each shortcut's own
+ * destination-selection rules one by one.
  */
 public final class ContainerListener implements Listener {
 
@@ -64,32 +78,45 @@ public final class ContainerListener implements Listener {
         if (!(event.getWhoClicked() instanceof Player player)) {
             return;
         }
-        if (tryMerge(event, player)) {
+        if (tryMerge(event, player) || tryGatherOntoCursor(event, player)) {
             return; // handled entirely by hand (event cancelled) - nothing left to reconcile
         }
 
         Inventory clicked = event.getClickedInventory();
         int slot = event.getSlot();
-        if (clicked == null || slot < 0) {
-            return;
-        }
-        String viewTitle = plainTitle(event.getView());
+        InventoryView view = event.getView();
+        String viewTitle = plainTitle(view);
         // Scheduled a tick later: at event-dispatch time the click hasn't been resolved by the
         // server yet, so re-reading the slot next tick is the reliable way to see where the item
         // actually ended up, regardless of the exact click type (pickup/place/swap/shift-click).
-        Bukkit.getScheduler().runTask(plugin, () -> reconcileClickResult(clicked, slot, player, viewTitle));
+        Bukkit.getScheduler().runTask(plugin, () -> {
+            if (clicked != null && slot >= 0) {
+                reconcileClickResult(clicked, slot, player, viewTitle);
+            }
+            // Shift-click (and anything else not handled above) can scatter a tracked stack
+            // across whichever slots vanilla's own algorithm picked in the OTHER inventory of
+            // this view, not just the clicked one - sweep both sides to pull any same-template
+            // fragments back together instead of trying to predict where vanilla put them.
+            consolidate(view.getTopInventory(), player, viewTitle);
+            consolidate(view.getBottomInventory(), player, viewTitle);
+        });
     }
 
     /**
      * Vanilla refuses to auto-combine two stacks whose PDC differs (every tracked unit's is
      * unique), even when the player's intent - left/right-clicking one tracked stack onto another
-     * of the same template - is clearly to merge them; left alone it would just swap them. This
-     * detects that specific case and builds the merge by hand before the event resolves. Returns
-     * true if it handled (and cancelled) the event.
+     * of the same template - is clearly to merge them; left alone it would swap them instead, and
+     * if the source stack didn't fully fit, that swap looked to the player like the rest of it
+     * just vanished (it didn't - it landed on the cursor - but nothing said so). This builds the
+     * merge by hand instead, moving as many units as actually fit: a left-click moves the whole
+     * source stack (whatever doesn't fit stays on the cursor), a right-click moves exactly one
+     * (matching vanilla's own place-one semantics for a stackable target). Returns true if it
+     * handled (and cancelled) the event.
      */
     private boolean tryMerge(InventoryClickEvent event, Player player) {
-        if (event.getClick() != ClickType.LEFT && event.getClick() != ClickType.RIGHT) {
-            return false; // only the unambiguous direct-click case is merge-assisted
+        ClickType click = event.getClick();
+        if (click != ClickType.LEFT && click != ClickType.RIGHT) {
+            return false; // shift-click/double-click/etc. are handled elsewhere
         }
         Inventory clicked = event.getClickedInventory();
         if (clicked == null || event.getSlot() < 0) {
@@ -116,27 +143,185 @@ public final class ContainerListener implements Listener {
             return false; // different templates shouldn't merge even if the material matches
         }
 
-        int combined = currentUnits.size() + cursorUnits.size();
-        if (combined > current.getMaxStackSize()) {
-            return false; // wouldn't fit - documented limitation, no partial-merge support
+        int transferLimit = click == ClickType.LEFT ? cursorUnits.size() : 1;
+        StackMath.MergeResult sliced = StackMath.mergeUnits(
+                toStrings(currentUnits), toStrings(cursorUnits), current.getMaxStackSize(), transferLimit);
+        if (sliced.destination().size() == currentUnits.size()) {
+            return false; // no room at all - let vanilla do its (safe) swap instead
         }
 
         event.setCancelled(true);
 
-        List<UUID> merged = new ArrayList<>(combined);
-        merged.addAll(currentUnits);
-        merged.addAll(cursorUnits);
-
+        List<UUID> newCurrentUnits = toUuids(sliced.destination());
         ItemStack mergedStack = current.clone();
-        mergedStack.setAmount(combined);
-        tracking.writeMergedUnits(mergedStack, merged, currentTemplate);
-
+        mergedStack.setAmount(newCurrentUnits.size());
+        tracking.writeMergedUnits(mergedStack, newCurrentUnits, currentTemplate);
         clicked.setItem(event.getSlot(), mergedStack);
-        player.setItemOnCursor(null);
+
+        List<UUID> remainingCursorUnits = toUuids(sliced.source());
+        if (remainingCursorUnits.isEmpty()) {
+            player.setItemOnCursor(null);
+        } else {
+            ItemStack cursorRemainder = cursor.clone();
+            cursorRemainder.setAmount(remainingCursorUnits.size());
+            tracking.writeMergedUnits(cursorRemainder, remainingCursorUnits, currentTemplate);
+            player.setItemOnCursor(cursorRemainder);
+        }
 
         resolveContext(clicked, event.getSlot(), player, plainTitle(event.getView()))
-                .ifPresent(ctx -> tracking.recordLocationForAll(merged, ctx, "MERGED", player));
+                .ifPresent(ctx -> tracking.recordLocationForAll(newCurrentUnits, ctx, "MERGED", player));
         return true;
+    }
+
+    /**
+     * Vanilla's double-click "collect all matching items onto the cursor" relies on the exact
+     * same similarity check that blocks every other vanilla shortcut here, so it silently finds
+     * nothing to collect for tracked stacks. This replicates it by hand: gather units from the
+     * clicked inventory's own slots (matching the rest of this class's documented per-inventory
+     * scope) onto the cursor stack up to its max size, front-to-back.
+     */
+    private boolean tryGatherOntoCursor(InventoryClickEvent event, Player player) {
+        if (event.getClick() != ClickType.DOUBLE_CLICK) {
+            return false;
+        }
+        ItemStack cursor = event.getCursor();
+        if (cursor == null || cursor.getType().isAir()) {
+            return false;
+        }
+        List<UUID> cursorUnits = tracking.readAllUnits(cursor);
+        if (cursorUnits.isEmpty()) {
+            return false; // untracked - vanilla's own gather already works fine for it
+        }
+        String templateKey = tracking.readTemplateKey(cursor);
+        if (templateKey == null) {
+            return false;
+        }
+        Inventory clicked = event.getClickedInventory();
+        if (clicked == null) {
+            return false;
+        }
+
+        ItemStack[] contents = clicked.getContents();
+        List<UUID> gathered = new ArrayList<>(cursorUnits);
+        boolean changed = false;
+
+        for (int slot = 0; slot < contents.length && gathered.size() < cursor.getMaxStackSize(); slot++) {
+            ItemStack item = contents[slot];
+            if (item == null || item.getType() != cursor.getType()) {
+                continue;
+            }
+            List<UUID> units = tracking.readAllUnits(item);
+            if (units.isEmpty() || !templateKey.equals(tracking.readTemplateKey(item))) {
+                continue;
+            }
+            int take = Math.min(cursor.getMaxStackSize() - gathered.size(), units.size());
+            gathered.addAll(units.subList(0, take));
+            List<UUID> remaining = units.subList(take, units.size());
+            if (remaining.isEmpty()) {
+                contents[slot] = null;
+            } else {
+                ItemStack remainder = item.clone();
+                remainder.setAmount(remaining.size());
+                tracking.writeMergedUnits(remainder, remaining, templateKey);
+                contents[slot] = remainder;
+            }
+            changed = true;
+        }
+
+        if (!changed) {
+            return false;
+        }
+
+        event.setCancelled(true);
+        clicked.setContents(contents);
+
+        ItemStack gatheredStack = cursor.clone();
+        gatheredStack.setAmount(gathered.size());
+        tracking.writeMergedUnits(gatheredStack, gathered, templateKey);
+        player.setItemOnCursor(gatheredStack);
+        // The gathered stack is floating on the cursor, not in a slot - same documented
+        // simplification as elsewhere in this class: its location row goes stale until it lands
+        // somewhere, which the next click's reconcile/consolidate pass picks up.
+        return true;
+    }
+
+    /**
+     * Sweeps every slot of the given inventory and merges any tracked stacks that share a
+     * template and have room, front-to-back. The general fix for every vanilla shortcut that can
+     * leave the same tracked template split across multiple slots - shift-click, hopper
+     * transfers, drags - without needing to replicate each one's own destination-selection rules;
+     * it just cleans up wherever vanilla put things. Idempotent (a second call on an
+     * already-consolidated inventory is a no-op) and cheap enough to run after every inventory
+     * action - a single greedy left-to-right pass may leave a little fragmentation in rare cases
+     * (e.g. three-way splits), which the very next action's sweep mops up.
+     */
+    private void consolidate(Inventory inventory, Player actor, String viewTitle) {
+        ItemStack[] contents = inventory.getContents();
+        Map<String, Integer> mergeTargetBySlotKey = new HashMap<>();
+        boolean changed = false;
+
+        for (int slot = 0; slot < contents.length; slot++) {
+            ItemStack item = contents[slot];
+            if (item == null || item.getType().isAir()) {
+                continue;
+            }
+            List<UUID> units = tracking.readAllUnits(item);
+            if (units.isEmpty()) {
+                continue;
+            }
+            String templateKey = tracking.readTemplateKey(item);
+            if (templateKey == null) {
+                continue;
+            }
+            String groupKey = item.getType().name() + ":" + templateKey;
+            Integer targetSlot = mergeTargetBySlotKey.get(groupKey);
+            if (targetSlot == null) {
+                mergeTargetBySlotKey.put(groupKey, slot);
+                continue;
+            }
+
+            ItemStack target = contents[targetSlot];
+            List<UUID> targetUnits = tracking.readAllUnits(target);
+            StackMath.MergeResult sliced = StackMath.mergeUnits(
+                    toStrings(targetUnits), toStrings(units), target.getMaxStackSize(), units.size());
+            if (sliced.destination().size() == targetUnits.size()) {
+                // target's already full - this stack becomes the new merge point for anything after it
+                mergeTargetBySlotKey.put(groupKey, slot);
+                continue;
+            }
+
+            List<UUID> newTargetUnits = toUuids(sliced.destination());
+            ItemStack mergedTarget = target.clone();
+            mergedTarget.setAmount(newTargetUnits.size());
+            tracking.writeMergedUnits(mergedTarget, newTargetUnits, templateKey);
+            contents[targetSlot] = mergedTarget;
+
+            List<UUID> remaining = toUuids(sliced.source());
+            if (remaining.isEmpty()) {
+                contents[slot] = null;
+            } else {
+                ItemStack remainder = item.clone();
+                remainder.setAmount(remaining.size());
+                tracking.writeMergedUnits(remainder, remaining, templateKey);
+                contents[slot] = remainder;
+            }
+
+            resolveContext(inventory, targetSlot, actor, viewTitle)
+                    .ifPresent(ctx -> tracking.recordLocationForAll(newTargetUnits, ctx, "MERGED", actor));
+            changed = true;
+        }
+
+        if (changed) {
+            inventory.setContents(contents);
+        }
+    }
+
+    private static List<String> toStrings(List<UUID> uuids) {
+        return uuids.stream().map(UUID::toString).toList();
+    }
+
+    private static List<UUID> toUuids(List<String> strings) {
+        return strings.stream().map(UUID::fromString).toList();
     }
 
     @EventHandler
@@ -274,6 +459,11 @@ public final class ContainerListener implements Listener {
             resolveContext(inv, localSlot, player, viewTitle)
                     .ifPresent(ctx -> tracking.recordLocationForAll(units, ctx, "MOVED", player));
         }
+
+        // A drag can spread a stack across several slots that each already held some of the same
+        // template - same fragmentation problem as shift-click, same fix.
+        consolidate(view.getTopInventory(), player, viewTitle);
+        consolidate(view.getBottomInventory(), player, viewTitle);
     }
 
     /**
