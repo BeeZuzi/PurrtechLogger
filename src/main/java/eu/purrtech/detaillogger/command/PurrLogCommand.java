@@ -13,6 +13,7 @@ import eu.purrtech.detaillogger.template.TemplateRegistry;
 import eu.purrtech.detaillogger.tracking.HistoryService;
 import eu.purrtech.detaillogger.tracking.PlayerDirectoryService;
 import eu.purrtech.detaillogger.tracking.ReconciliationSweepTask;
+import eu.purrtech.detaillogger.util.EventLineFormatter;
 import io.papermc.paper.command.brigadier.BasicCommand;
 import io.papermc.paper.command.brigadier.CommandSourceStack;
 import org.bukkit.Bukkit;
@@ -25,7 +26,6 @@ import org.jetbrains.annotations.Nullable;
 
 import java.io.File;
 import java.io.IOException;
-import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -250,13 +250,12 @@ public final class PurrLogCommand implements BasicCommand {
         List<EventRecord> events = found.get().events();
         sender.sendMessage("historie (" + events.size() + "):");
         for (EventRecord e : events) {
-            String where = e.world() != null ? " @ " + e.world() + " " + e.x() + "," + e.y() + "," + e.z() : "";
-            sender.sendMessage(" - " + formatTime(e.timestamp()) + " " + e.eventType() + where);
+            sender.sendMessage(" - " + EventLineFormatter.formatLine(e));
         }
     }
 
     private static String formatTime(Long epochMillis) {
-        return epochMillis == null ? "?" : Instant.ofEpochMilli(epochMillis).toString();
+        return EventLineFormatter.formatTime(epochMillis);
     }
 
     private void runReload(CommandSender sender) {

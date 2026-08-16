@@ -8,6 +8,7 @@ import eu.purrtech.detaillogger.db.dao.TemplateDao;
 import eu.purrtech.detaillogger.db.dao.TrackedUnitRecord;
 import eu.purrtech.detaillogger.tracking.HistoryService;
 import eu.purrtech.detaillogger.tracking.PlayerDirectoryService;
+import eu.purrtech.detaillogger.util.EventLineFormatter;
 import eu.purrtech.displaygui.API.PageType;
 import eu.purrtech.displaygui.API.data.buttonData.ButtonData;
 import eu.purrtech.displaygui.API.data.buttonData.ItemButtonData;
@@ -35,7 +36,6 @@ import org.bukkit.plugin.Plugin;
 import eu.purrtech.displaygui.API.DisplayGuiAPI;
 
 import java.sql.SQLException;
-import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -174,22 +174,11 @@ public final class AdminGuiService implements Listener {
 
         List<String> historyLines = new ArrayList<>();
         for (EventRecord e : history.events()) {
-            String where = e.world() != null ? " @ " + e.world() + " " + e.x() + "," + e.y() + "," + e.z() : "";
-            String playerUUID = e.playerUuid() != null ? " hrac=" + e.playerUuid() : "";
-            if (!playerUUID.isEmpty()) {
-                OfflinePlayer offlinePlayer = Bukkit.getOfflinePlayer(e.playerUuid());
-                if (offlinePlayer.isOnline()) {
-                    Player onlinePlayer = offlinePlayer.getPlayer();
-                    if (onlinePlayer != null) {
-                        playerUUID = playerUUID + " alias=" + onlinePlayer.displayName().insertion();
-                    }
-                } else {
-                    playerUUID = playerUUID + " alias: " + offlinePlayer.getPlayerProfile().getName();
-                }
-
-
+            String line = EventLineFormatter.formatLine(e);
+            if (e.playerUuid() != null) {
+                line = line + " hrac=" + resolvePlayerAlias(e.playerUuid());
             }
-            historyLines.add(formatTime(e.timestamp()) + " " + e.eventType() + where + " " + playerUUID + " " + e.detail());
+            historyLines.add(line);
         }
 
         List<ButtonData> buttons = new ArrayList<>();
@@ -335,16 +324,13 @@ public final class AdminGuiService implements Listener {
         }
         List<ActivityLine> lines = new ArrayList<>();
         for (EventRecord e : activity.events()) {
-            String where = e.world() != null ? " @ " + e.world() + " " + e.x() + "," + e.y() + "," + e.z() : "";
-            String gamemode = e.gamemode() != null ? " gamemode=" + e.gamemode() : "";
-            String tag = e.eventType().equals("CREATIVE_DUPLICATE") ? "[DUPE-CREATIVE] " : "";
-            lines.add(new ActivityLine(e.timestamp(),
-                    formatTime(e.timestamp()) + " " + tag + e.eventType() + where + gamemode));
+            String tag = e.eventType().equals("CREATIVE_DUPLICATE") ? "DUPE-CREATIVE " : "";
+            lines.add(new ActivityLine(e.timestamp(), tag + EventLineFormatter.formatLine(e)));
         }
         for (DupeAlertRecord a : activity.alerts()) {
             lines.add(new ActivityLine(a.detectedAt(),
-                    formatTime(a.detectedAt()) + " [DUPE-BUG] [" + a.severity() + "] " + a.note()
-                            + " uuid=" + a.unitUuid()));
+                    "DUPE-BUG [" + EventLineFormatter.formatTime(a.detectedAt()) + "] [" + a.severity() + "] "
+                            + a.note() + " uuid=" + a.unitUuid()));
         }
         List<String> activityLines = lines.stream()
                 .sorted(Comparator.comparingLong(ActivityLine::timestamp).reversed())
@@ -430,6 +416,16 @@ public final class AdminGuiService implements Listener {
     }
 
     private static String formatTime(Long epochMillis) {
-        return epochMillis == null ? "?" : Instant.ofEpochMilli(epochMillis).toString();
+        return EventLineFormatter.formatTime(epochMillis);
+    }
+
+    /** Best-effort "name (uuid)" for a history line - falls back to the raw UUID if the profile
+     * can't be resolved (e.g. never cached, offline-mode server). */
+    private static String resolvePlayerAlias(String playerUuidString) {
+        UUID playerUuid = UUID.fromString(playerUuidString);
+        OfflinePlayer offlinePlayer = Bukkit.getOfflinePlayer(playerUuid);
+        Player onlinePlayer = offlinePlayer.getPlayer();
+        String name = onlinePlayer != null ? onlinePlayer.getName() : offlinePlayer.getPlayerProfile().getName();
+        return (name != null ? name : playerUuidString);
     }
 }

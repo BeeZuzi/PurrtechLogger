@@ -32,14 +32,19 @@ public final class EventDao {
     }
 
     /**
-     * Blocking read - must be called off the main thread.
+     * Blocking read - must be called off the main thread. Excludes {@code MOVED} (a tracked
+     * item's own within-inventory slot reshuffle) - by far the noisiest, least meaningful event
+     * type for a human reading history, and pure clutter compared to genesis/placement/
+     * destruction/dupe events. Still written to the DB by every writer unchanged (see
+     * {@link eu.purrtech.detaillogger.db.DbWriterThread}) - only reads here filter it out, so it
+     * stays available for anti-dupe forensics via a direct SQL query if ever needed.
      */
     public List<EventRecord> findByUnit(String unitUuid) throws SQLException {
         MainThreadCheck.assertAsync();
         Connection connection = borrow();
         try (PreparedStatement ps = connection.prepareStatement("""
                 SELECT id, unit_uuid, event_type, timestamp, world, x, y, z, player_uuid, detail, gamemode
-                FROM events WHERE unit_uuid = ? ORDER BY timestamp
+                FROM events WHERE unit_uuid = ? AND event_type != 'MOVED' ORDER BY timestamp
                 """)) {
             ps.setString(1, unitUuid);
             try (ResultSet rs = ps.executeQuery()) {
@@ -53,13 +58,16 @@ public final class EventDao {
     /**
      * Blocking read - must be called off the main thread. Newest first, capped at {@code limit}
      * so an active player's admin-GUI activity page never has to pull an unbounded history.
+     * {@code MOVED} is excluded before the limit is applied (not after) - see
+     * {@link #findByUnit} - otherwise an active player's noisy slot-shuffling would crowd out
+     * genuinely meaningful events before they ever reach the cap.
      */
     public List<EventRecord> findByPlayer(String playerUuid, int limit) throws SQLException {
         MainThreadCheck.assertAsync();
         Connection connection = borrow();
         try (PreparedStatement ps = connection.prepareStatement("""
                 SELECT id, unit_uuid, event_type, timestamp, world, x, y, z, player_uuid, detail, gamemode
-                FROM events WHERE player_uuid = ? ORDER BY timestamp DESC LIMIT ?
+                FROM events WHERE player_uuid = ? AND event_type != 'MOVED' ORDER BY timestamp DESC LIMIT ?
                 """)) {
             ps.setString(1, playerUuid);
             ps.setInt(2, limit);
