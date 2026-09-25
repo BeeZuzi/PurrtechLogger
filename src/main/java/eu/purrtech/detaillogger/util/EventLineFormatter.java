@@ -71,6 +71,12 @@ public final class EventLineFormatter {
         if (detailJson == null || detailJson.isBlank()) {
             return "";
         }
+        // Shulker sessions (see ShulkerSessionLog) carry base64 item snapshots after the summary
+        // fields - only the summary is meant for a text line.
+        int snapshots = detailJson.indexOf(",\"before\":");
+        if (snapshots >= 0) {
+            detailJson = detailJson.substring(0, snapshots);
+        }
         Matcher matcher = DETAIL_FIELD.matcher(detailJson);
         List<String> parts = new ArrayList<>();
         while (matcher.find()) {

@@ -26,6 +26,7 @@ import eu.purrtech.detaillogger.tracking.listener.ItemLifecycleListener;
 import eu.purrtech.detaillogger.tracking.listener.PlayerJoinScanListener;
 import eu.purrtech.detaillogger.tracking.listener.PlayerPresenceListener;
 import eu.purrtech.detaillogger.tracking.listener.ShulkerNestingListener;
+import eu.purrtech.detaillogger.tracking.listener.ShulkerSessionListener;
 import eu.purrtech.detaillogger.tracking.pdc.TrackedBlockTag;
 import eu.purrtech.detaillogger.tracking.pdc.TrackedEntityTag;
 import eu.purrtech.detaillogger.tracking.pdc.TrackedItemTag;
@@ -85,6 +86,7 @@ public final class DetailLoggerPlugin extends JavaPlugin {
         getServer().getPluginManager().registerEvents(new ItemDestructionListener(itemTracking), this);
         getServer().getPluginManager().registerEvents(new ContainerListener(itemTracking, this), this);
         getServer().getPluginManager().registerEvents(new ShulkerNestingListener(itemTracking), this);
+        getServer().getPluginManager().registerEvents(new ShulkerSessionListener(itemTracking, itemTag, eventDao), this);
         getServer().getPluginManager().registerEvents(new ChunkIndexListener(blockIndex, locationDao, this), this);
         getServer().getPluginManager().registerEvents(new BlockLifecycleListener(blockTracking, entityTag, this), this);
 

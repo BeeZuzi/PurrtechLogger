@@ -13,6 +13,7 @@ import eu.purrtech.detaillogger.tracking.HistoryService;
 import eu.purrtech.detaillogger.tracking.ItemTrackingService;
 import eu.purrtech.detaillogger.tracking.NearbyPlayers;
 import eu.purrtech.detaillogger.tracking.PlayerDirectoryService;
+import eu.purrtech.detaillogger.tracking.ShulkerSessionLog;
 import eu.purrtech.detaillogger.util.EventLineFormatter;
 import eu.purrtech.displaygui.API.PageType;
 import eu.purrtech.displaygui.API.actions.MenuActionContext;
@@ -130,7 +131,8 @@ public final class AdminGuiService implements Listener {
     /** Category filter shown on the events page - excludes {@code DBTEST_PING} (dbtest-only noise). */
     private static final List<String> EVENT_CATEGORIES = List.of(
             "GENESIS", "PLACED", "MOVED", "MERGED", "SEEN", "SPAWNED",
-            "DROPPED", "PICKED_UP", "DESTROYED", "CREATIVE_DUPLICATE", "VIEWED_IN_MENU");
+            "DROPPED", "PICKED_UP", "DESTROYED", "CREATIVE_DUPLICATE", "VIEWED_IN_MENU",
+            ShulkerSessionLog.EVENT_TYPE);
 
     private static final Map<String, String> CATEGORY_LABELS = Map.ofEntries(
             Map.entry("GENESIS", "Vznik"),
@@ -146,7 +148,8 @@ public final class AdminGuiService implements Listener {
             // step on its own; shortened so the category grid's column width is driven by the more
             // typical 6-8 char labels instead. See [[reference-purrtechdisplaygui-coordinate-rules]].
             Map.entry("CREATIVE_DUPLICATE", "Dupe"),
-            Map.entry("VIEWED_IN_MENU", "V menu"));
+            Map.entry("VIEWED_IN_MENU", "V menu"),
+            Map.entry(ShulkerSessionLog.EVENT_TYPE, "Shulker"));
 
     /** Monday-first weekday header row for {@link #openCalendarPage}, diacritics stripped per the
      * project's no-diacritics-in-labels convention (Pondeli..Nedele). */
@@ -998,7 +1001,11 @@ public final class AdminGuiService implements Listener {
                                          Map<String, String> materials, EventsFilter filter, double rowSpacingBlocks) {
         List<ButtonData> rows = new ArrayList<>();
         for (EventRecord ev : events) {
-            String materialName = ev.unitUuid() != null ? materials.get(ev.unitUuid()) : null;
+            // Shulker sessions carry the shulker's own color/material in their detail - a placed
+            // shulker has no unit, and a held one's anchor template is just plain SHULKER_BOX.
+            String materialName = ShulkerSessionLog.EVENT_TYPE.equals(ev.eventType())
+                    ? ShulkerSessionLog.shulkerMaterial(ev.detail())
+                    : ev.unitUuid() != null ? materials.get(ev.unitUuid()) : null;
             ItemStack icon = iconFor(materialName);
             rows.add(eventRowButton("event-" + ev.id(), 0, 0, 0.01,
                     eventRowLines(ev, filter.relativeTime), icon, e -> openEventDetail(player, ev.id()),
@@ -1093,6 +1100,8 @@ public final class AdminGuiService implements Listener {
         /** Unit behind the shown preview, null = nothing clickable (blank or no-item barrier). */
         private String unitUuid;
         private boolean hoveringPreview;
+        /** Shown event is a shulker session - clicking opens its contents grid instead. */
+        private boolean shulkerEvent;
         private BukkitTask hideTask;
     }
 
@@ -1166,6 +1175,23 @@ public final class AdminGuiService implements Listener {
         }
         state.shownKey = key;
         state.unitUuid = ev.unitUuid();
+        state.shulkerEvent = ShulkerSessionLog.EVENT_TYPE.equals(ev.eventType());
+
+        if (state.shulkerEvent) {
+            ShulkerSessionLog.Session session = ShulkerSessionLog.parse(ev.detail());
+            List<String> lines = new ArrayList<>();
+            lines.add("Shulker #" + ev.id());
+            if (session != null) {
+                List<ShulkerSessionLog.SlotDiff> diffs = ShulkerSessionLog.diff(session.before(), session.after());
+                lines.add(ShulkerSessionLog.MODE_HELD.equals(session.mode()) ? "Otevren v ruce" : "Polozeny shulker");
+                lines.add("Kde: " + (ev.world() != null ? ev.world() + " " + ev.x() + " " + ev.y() + " " + ev.z() : "?"));
+                lines.add("Pridal: " + ShulkerSessionLog.totalAdded(diffs) + " ks");
+                lines.add("Vzal: " + ShulkerSessionLog.totalRemoved(diffs) + " ks");
+            }
+            lines.add("> Klikni pro obsah shulkeru");
+            applyEventPreview(player, rowIcon, lines, PANEL_BACKGROUND);
+            return;
+        }
 
         if (ev.unitUuid() == null) {
             applyEventPreview(player, new ItemStack(Material.BARRIER),
@@ -1369,6 +1395,12 @@ public final class AdminGuiService implements Listener {
         if (state == null || state.shownKey == null) {
             return;
         }
+        if (state.shulkerEvent) {
+            long eventId = Long.parseLong(state.shownKey);
+            resetEventPreview(player);
+            openEventDetail(player, eventId);
+            return;
+        }
         if (state.unitUuid == null) {
             player.sendMessage("Tento event neobsahuje zadny item.");
             return;
@@ -1426,8 +1458,19 @@ public final class AdminGuiService implements Listener {
         boolean hasLocation = event.world() != null && event.x() != null && event.y() != null && event.z() != null;
 
         List<ButtonData> buttons = new ArrayList<>();
-        buttons.add(infoTextButton(cx(0), cy(-1.3), 0.05, infoLines));
-        buttons.add(scrollListButton("event-nearby", cx(0), cy(0.3), 0.05, nearbyLines,
+        // Shulker session: inventory-style grid of its contents on the right, so the usual info +
+        // nearby column moves left to make room.
+        ShulkerSessionLog.Session shulker = ShulkerSessionLog.EVENT_TYPE.equals(event.eventType())
+                ? ShulkerSessionLog.parse(event.detail()) : null;
+        double infoX = 0;
+        if (shulker != null) {
+            infoX = -2.4;
+            infoLines.add(1, "Shulker: " + shulker.shulkerMaterial() + " ("
+                    + (ShulkerSessionLog.MODE_HELD.equals(shulker.mode()) ? "otevren v ruce" : "polozeny") + ")");
+            addShulkerGridButtons(buttons, shulker);
+        }
+        buttons.add(infoTextButton(cx(infoX), cy(-1.3), 0.05, infoLines));
+        buttons.add(scrollListButton("event-nearby", cx(infoX), cy(0.3), 0.05, nearbyLines,
                 "(nikdo v okoli " + (int) NearbyPlayers.DEFAULT_RADIUS_BLOCKS + " bloku)"));
         if (hasLocation) {
             buttons.add(navButton("teleport", cx(-1.0), cy(1.4), 0.05, "Teleportovat", e -> teleportToEvent(player, event)));
@@ -1438,6 +1481,155 @@ public final class AdminGuiService implements Listener {
 
         ScreenPageData screen = new ScreenPageData(backgroundPage(), buttons, "purrtechlog:event:" + event.id(), MENU_DISTANCE_PIXELS);
         DisplayGuiAPI.openMenu(player, screen);
+    }
+
+    // === Shulker session grid - "když to bude shulker tak ti to ukáže... co v něm bylo a co vzal
+    // (označíš barvou, co přidal a odebral)... minecraft inventář layout". ===
+
+    /** Visual size (blocks) of one slot square and the step between slots. */
+    private static final double SHULKER_SLOT_BLOCKS = 0.42;
+    private static final double SHULKER_SLOT_STEP = 0.46;
+    /** Grid center, relative to screen center; rows start at the top row's y. */
+    private static final double SHULKER_GRID_CENTER_X = 1.9;
+    private static final double SHULKER_GRID_TOP_Y = -1.05;
+    private static final Color SLOT_EMPTY = Color.fromARGB(170, 55, 55, 55);
+    private static final Color SLOT_SAME = Color.fromARGB(200, 95, 95, 95);
+    private static final Color SLOT_ADDED = Color.fromARGB(220, 40, 140, 40);
+    private static final Color SLOT_REMOVED = Color.fromARGB(220, 165, 35, 35);
+    private static final Color SLOT_REPLACED = Color.fromARGB(220, 175, 140, 20);
+
+    /** 9x3 grid like the shulker's own inventory, plus a legend and a text list of the changes. */
+    private void addShulkerGridButtons(List<ButtonData> buttons, ShulkerSessionLog.Session session) {
+        List<ShulkerSessionLog.SlotDiff> diffs = ShulkerSessionLog.diff(session.before(), session.after());
+        double left = SHULKER_GRID_CENTER_X - 4 * SHULKER_SLOT_STEP;
+
+        List<String> changeLines = new ArrayList<>();
+        for (ShulkerSessionLog.SlotDiff d : diffs) {
+            int column = d.slot() % 9;
+            int row = d.slot() / 9;
+            // +y = down in this GUI; a slot's text background grows upward from its anchor, so the
+            // anchor is the slot's bottom edge.
+            double x = left + column * SHULKER_SLOT_STEP;
+            double y = SHULKER_GRID_TOP_Y + row * SHULKER_SLOT_STEP + SHULKER_SLOT_BLOCKS;
+            buttons.add(shulkerSlotButton("shulker-slot-" + d.slot(), cx(x), cy(y), 0.05, d));
+
+            String line = switch (d.change()) {
+                case ADDED -> "Slot " + d.slot() + ": pridal +" + d.delta() + " " + itemLabel(d.after());
+                case REMOVED -> "Slot " + d.slot() + ": vzal " + (-d.delta()) + " " + itemLabel(d.before());
+                case REPLACED -> "Slot " + d.slot() + ": " + d.before().getAmount() + " " + itemLabel(d.before())
+                        + " -> " + d.after().getAmount() + " " + itemLabel(d.after());
+                case SAME -> null;
+            };
+            if (line != null) {
+                changeLines.add(line);
+            }
+        }
+
+        int added = ShulkerSessionLog.totalAdded(diffs);
+        int removed = ShulkerSessionLog.totalRemoved(diffs);
+        double belowGrid = SHULKER_GRID_TOP_Y + 3 * SHULKER_SLOT_STEP + 0.3;
+        buttons.add(buildStaticText("shulker-legend", cx(SHULKER_GRID_CENTER_X), cy(belowGrid), 0.05, List.of(
+                "Pridal: " + added + " ks  |  Vzal: " + removed + " ks",
+                "zelena = pridal, cervena = vzal, zluta = vymenil")));
+        buttons.add(scrollListButton("shulker-changes", cx(SHULKER_GRID_CENTER_X), cy(belowGrid + 1.1), 0.05,
+                changeLines, "(obsah se nezmenil)"));
+    }
+
+    /**
+     * One inventory slot: a colored square (text background scaled to a fixed size), the item on
+     * it, and its amount / change in the corner. A taken-out item is still drawn (on red) so it's
+     * visible what was taken. Hovering shows the item's name in the action bar.
+     */
+    private ButtonData shulkerSlotButton(String id, double x, double y, double z, ShulkerSessionLog.SlotDiff d) {
+        ItemStack shown = d.change() == ShulkerSessionLog.Change.REMOVED ? d.before() : d.after();
+        if (shown == null) {
+            shown = d.before();
+        }
+        Color background = switch (d.change()) {
+            case ADDED -> SLOT_ADDED;
+            case REMOVED -> SLOT_REMOVED;
+            case REPLACED -> SLOT_REPLACED;
+            case SAME -> shown != null ? SLOT_SAME : SLOT_EMPTY;
+        };
+
+        TextDisplayLayerData square = new TextDisplayLayerData(0, 0, 0, GUI_PATH, id + "-bg", 1)
+                .setText(List.of(" "))
+                .setBackground(background);
+        square.setAutoFitText(false);
+        double naturalWidth = Math.max(0.05, square.estimateContentWidthBlocks());
+        double naturalHeight = Math.max(0.05, square.estimateContentHeightBlocks());
+        square.setScale(new Vector3f((float) (SHULKER_SLOT_BLOCKS / naturalWidth),
+                (float) (SHULKER_SLOT_BLOCKS / naturalHeight), 1f));
+
+        List<DisplayLayerData> layers = new ArrayList<>();
+        layers.add(square);
+        String hoverText = "Prazdny slot";
+        if (shown != null) {
+            ItemDisplayLayerData item = new ItemDisplayLayerData(0, -SHULKER_SLOT_BLOCKS / 2.0, 0.02, GUI_PATH, id + "-item", 2)
+                    .setItemStack(shown);
+            float itemScale = (float) (SHULKER_SLOT_BLOCKS * 0.8);
+            item.setScale(new Vector3f(itemScale, itemScale, itemScale));
+            layers.add(item);
+
+            String count = switch (d.change()) {
+                case ADDED -> "+" + d.delta();
+                case REMOVED -> String.valueOf(d.delta());
+                default -> shown.getAmount() > 1 ? String.valueOf(shown.getAmount()) : "";
+            };
+            if (!count.isEmpty()) {
+                TextDisplayLayerData countText = new TextDisplayLayerData(
+                        SHULKER_SLOT_BLOCKS * 0.22, 0, 0.03, GUI_PATH, id + "-count", 3)
+                        .setText(List.of(count))
+                        .setBackground(TRANSPARENT);
+                countText.setAutoFitText(false);
+                countText.setScale(new Vector3f(0.5f, 0.5f, 1f));
+                layers.add(countText);
+            }
+            hoverText = itemLabel(shown) + " x" + shown.getAmount() + switch (d.change()) {
+                case ADDED -> " (pridal " + d.delta() + ")";
+                case REMOVED -> " (vzal " + (-d.delta()) + ")";
+                case REPLACED -> " (driv " + d.before().getAmount() + " " + itemLabel(d.before()) + ")";
+                case SAME -> "";
+            };
+        }
+
+        double sizePixels = SHULKER_SLOT_BLOCKS * PIXELS_PER_BLOCK;
+        String finalHoverText = hoverText;
+        return ButtonData.builder()
+                .at(x, y, z)
+                .size(sizePixels, sizePixels)
+                .layers(new LayersData(layers, GUI_PATH + ":" + id, GUI_PATH))
+                .id(id)
+                .onHoverStart(ctx -> ctx.player().sendActionBar(net.kyori.adventure.text.Component.text(finalHoverText)))
+                .hitboxOffsetZ(hitboxRecessZ(sizePixels))
+                .build();
+    }
+
+    /** Display name if the item has one, else its material. */
+    private static String itemLabel(ItemStack item) {
+        if (item == null) {
+            return "?";
+        }
+        ItemMeta meta = item.getItemMeta();
+        if (meta != null && meta.hasDisplayName() && meta.displayName() != null) {
+            return PlainTextComponentSerializer.plainText().serialize(meta.displayName());
+        }
+        return item.getType().name();
+    }
+
+    /** Non-clickable multi-line text panel with its own id (unlike {@link #infoTextButton}, whose
+     * id is fixed, so there can be several per page). */
+    private ButtonData buildStaticText(String id, double x, double y, double z, List<String> lines) {
+        TextDisplayLayerData text = new TextDisplayLayerData(0, 0, 0, GUI_PATH, id + "-text", 1)
+                .setText(lines)
+                .setBackground(PANEL_BACKGROUND);
+        return ButtonData.builder()
+                .at(x, y, z)
+                .size(30, 10)
+                .layers(new LayersData(List.of(text), GUI_PATH + ":" + id, GUI_PATH))
+                .id(id)
+                .hitboxOffsetZ(hitboxRecessZ(30))
+                .build();
     }
 
     /** "když na to klikneš tak tě to tam portne" - teleports to the event's recorded block
