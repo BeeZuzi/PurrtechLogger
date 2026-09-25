@@ -899,7 +899,9 @@ public final class AdminGuiService implements Listener {
      * text (never below {@link #COMPACT_MIN_TEXT_SCALE}), same idea as {@link #compactButton}, so
      * a long "#id  time  Player: name - action" line 1 can't grow wide enough to spill into the
      * filter column to its left. */
-    private static final double EVENTS_ROW_TARGET_WIDTH_BLOCKS = 3.6;
+    // Was 3.6 - the rows' left side reached into the center column's buttons ("zmenši tu šířku
+    // těch tlačítek... hlavně levou část").
+    private static final double EVENTS_ROW_TARGET_WIDTH_BLOCKS = 3.0;
 
     /**
      * A single clickable event-list row: two real lines of text (unlike {@link #buildTextButton}'s
@@ -912,7 +914,9 @@ public final class AdminGuiService implements Listener {
     private ButtonData eventRowButton(String id, double x, double y, double z, List<String> lines, ItemStack icon,
                                        Consumer<MenuButtonClickEvent> onClick,
                                        Consumer<MenuActionContext> onHoverStart, Consumer<MenuActionContext> onHoverEnd) {
-        TextDisplayLayerData text = new TextDisplayLayerData(0, 0, 0, GUI_PATH, id + "-text", 1)
+        // Text shifted right by half an icon so text + icon together are centered on the button -
+        // the (always centered) hitbox then only needs to be text + icon wide.
+        TextDisplayLayerData text = new TextDisplayLayerData(EVENT_ROW_ICON_BLOCKS / 2.0, 0, 0, GUI_PATH, id + "-text", 1)
                 .setText(lines)
                 .setBackground(BUTTON_BACKGROUND);
         text.setAutoFitText(false);
@@ -934,16 +938,14 @@ public final class AdminGuiService implements Listener {
         // centered on the text - a text display grows upward from its anchor while an item display
         // is centered on it, hence the -height/2 (this GUI's local +y = down).
         ItemDisplayLayerData iconLayer = new ItemDisplayLayerData(
-                -(textWidthBlocks / 2.0 + EVENT_ROW_ICON_BLOCKS / 2.0), -textHeightBlocks / 2.0, 0,
+                -textWidthBlocks / 2.0, -textHeightBlocks / 2.0, 0,
                 GUI_PATH, id + "-icon", 2)
                 .setItemStack(icon);
         iconLayer.setScale(new Vector3f((float) EVENT_ROW_ICON_BLOCKS, (float) EVENT_ROW_ICON_BLOCKS, (float) EVENT_ROW_ICON_BLOCKS));
         iconLayer.setRotationY(EVENTS_LIST_ROTATION_Y_DEGREES);
 
-        // Hitbox stays centered on the text (Interaction can't be offset sideways), so it's widened
-        // by the icon on both sides to still cover the icon.
         double widthPixels = Math.max(HITBOX_MIN_WIDTH_PX,
-                (textWidthBlocks + 2 * EVENT_ROW_ICON_BLOCKS) * PIXELS_PER_BLOCK + HITBOX_PADDING_PX);
+                (textWidthBlocks + EVENT_ROW_ICON_BLOCKS) * PIXELS_PER_BLOCK + HITBOX_PADDING_PX);
         double heightPixels = Math.max(HITBOX_HEIGHT_PX,
                 textHeightBlocks * PIXELS_PER_BLOCK + HITBOX_PADDING_PX);
         LayersData design = new LayersData(List.of(text, iconLayer), GUI_PATH + ":" + id, GUI_PATH);
@@ -993,7 +995,7 @@ public final class AdminGuiService implements Listener {
                     ctx -> scheduleEventPreviewHide(player)));
         }
 
-        double widthPixels = EVENTS_ROW_TARGET_WIDTH_BLOCKS * PIXELS_PER_BLOCK + HITBOX_PADDING_PX;
+        double widthPixels = (EVENTS_ROW_TARGET_WIDTH_BLOCKS + EVENT_ROW_ICON_BLOCKS) * PIXELS_PER_BLOCK + HITBOX_PADDING_PX;
         double heightPixels = EVENTS_VISIBLE_ROWS * rowSpacingBlocks * PIXELS_PER_BLOCK;
 
         // Frame/background panel spans the whole visible column, vertically centered on it - since
@@ -1052,12 +1054,14 @@ public final class AdminGuiService implements Listener {
     private static final String EVENT_PREVIEW_ID = "event-preview";
     /** Preview panel center, relative to the list column's center: half the widest row
      * (text + icon), plus a small gap, plus half the panel. Not yet confirmed in-game. */
-    private static final double EVENT_PREVIEW_OFFSET_X = 3.8;
+    // Was 3.8 - moved closer to the list ("dej více blíže"); the stronger tilt below also narrows
+    // how wide the panel looks, so it fits closer without touching the rows.
+    private static final double EVENT_PREVIEW_OFFSET_X = 3.0;
     private static final double EVENT_PREVIEW_WIDTH_BLOCKS = 2.8;
     private static final double EVENT_PREVIEW_HEIGHT_BLOCKS = 3.0;
     private static final double EVENT_PREVIEW_ITEM_BLOCKS = 0.7;
     /** Angled back toward the player more than the list, since it sits even further right. */
-    private static final float EVENT_PREVIEW_ROTATION_Y_DEGREES = -25f;
+    private static final float EVENT_PREVIEW_ROTATION_Y_DEGREES = -35f;
     /** "tam bude ještě 2 sekundy a pak to zmizne" */
     private static final long EVENT_PREVIEW_LINGER_TICKS = 40;
     private static final Color TRANSPARENT = Color.fromARGB(0, 0, 0, 0);
