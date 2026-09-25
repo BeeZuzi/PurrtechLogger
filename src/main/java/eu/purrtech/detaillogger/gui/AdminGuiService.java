@@ -361,7 +361,8 @@ public final class AdminGuiService implements Listener {
                     return;
                 }
                 String material = templateDao.findMaterialById(found.get().unit().templateId());
-                Bukkit.getScheduler().runTask(plugin, () -> openDetailPage(player, found.get(), material));
+                UnitLocationRecord location = locationDao.findByUnit(uuidString);
+                Bukkit.getScheduler().runTask(plugin, () -> openDetailPage(player, found.get(), material, location));
             } catch (SQLException e) {
                 logger.severe("Admin GUI detail lookup selhal: " + e);
                 Bukkit.getScheduler().runTask(plugin, () -> player.sendMessage("Lookup selhal, viz konzole."));
@@ -369,32 +370,57 @@ public final class AdminGuiService implements Listener {
         });
     }
 
-    private void openDetailPage(Player player, HistoryService.UnitHistory history, String materialName) {
+    /** Item detail page layout - history list left, item + its info right ("UUID a další
+     * informace ohledně daného itemu dej doprava"). Not yet confirmed in-game. */
+    private static final double ITEM_HISTORY_COLUMN_X = -1.3;
+    private static final float ITEM_HISTORY_ROTATION_Y_DEGREES = 10f;
+    private static final double ITEM_INFO_COLUMN_X = 2.9;
+    private static final String ITEM_ICON_ID = "item-icon";
+    private static final double ITEM_ICON_BLOCKS = 0.8;
+
+    private void openDetailPage(Player player, HistoryService.UnitHistory history, String materialName,
+                                UnitLocationRecord location) {
         TrackedUnitRecord unit = history.unit();
-        Material material = materialName != null ? Material.matchMaterial(materialName) : null;
-        ItemStack icon = new ItemStack(material != null ? material : Material.BARRIER);
+        // The real item (enchant glint, custom model, name) if its last location is loaded -
+        // otherwise just its template material ("místo stonu bude ten item").
+        ItemStack live = findLiveItem(unit.uuid(), location);
+        ItemStack icon = live != null ? live : iconFor(materialName);
 
         List<String> infoLines = new ArrayList<>();
+        infoLines.add(itemTitle(live, materialName));
         infoLines.add("UUID: " + unit.uuid());
-        infoLines.add("Kind: " + unit.kind() + "  Origin: " + unit.origin());
-        infoLines.add("Alive: " + unit.alive());
-        if (!unit.alive()) {
-            infoLines.add("Znicen: " + unit.destroyedCause() + " @ " + formatTime(unit.destroyedAt()));
+        infoLines.add("Material: " + (materialName != null ? materialName : "?"));
+        if (live != null) {
+            infoLines.add("Mnozstvi: " + live.getAmount() + " ks ve stacku");
+            infoLines.add("Enchanty: " + formatEnchants(live));
+        } else {
+            infoLines.add("Mnozstvi/enchanty: ? (item neni nacteny)");
         }
+        infoLines.add("Kind: " + unit.kind() + "  Origin: " + unit.origin());
+        infoLines.add("Vznik: " + formatTime(unit.genesisAt()));
+        infoLines.add("Stav: " + (unit.alive() ? "existuje"
+                : "znicen (" + unit.destroyedCause() + ") " + formatTime(unit.destroyedAt())));
         if (unit.duplicatedFromUuid() != null) {
             infoLines.add("Duplikat z: " + unit.duplicatedFromUuid());
         }
+        infoLines.add("Poloha: " + formatUnitLocation(location));
+        infoLines.add("Udalosti: " + history.events().size());
 
-        List<String> historyLines = new ArrayList<>();
-        for (EventRecord e : history.events()) {
-            historyLines.add(formatEventLine(e));
-        }
+        // History as the same clickable scroll list as the events menu, newest first like there.
+        List<EventRecord> events = new ArrayList<>(history.events());
+        events.sort(Comparator.comparingLong(EventRecord::timestamp).reversed());
+        double rowStepY = 0.65;
+        double bottomRowY = -1.0 + (EVENTS_VISIBLE_ROWS - 1) * rowStepY;
+        EventsFilter filter = eventsFilters.get(player.getUniqueId());
+        boolean relativeTime = filter != null && filter.relativeTime;
+        Map<String, String> materials = materialName != null ? Map.of(unit.uuid(), materialName) : Map.of();
 
         List<ButtonData> buttons = new ArrayList<>();
-        buttons.add(iconButton(cx(-2.7), cy(-1.3), 0.05, icon));
-        buttons.add(infoTextButton(cx(0.8), cy(-1.3), 0.05, infoLines));
-        buttons.add(scrollListButton("history", cx(0), cy(0.1), 0.05, historyLines, "(zadna historie)"));
-        buttons.add(navButton("back", cx(0), cy(1.4), -0.05, "Zpet", e -> openMainMenu(player)));
+        buttons.add(eventsListButton(player, "item-history", cx(ITEM_HISTORY_COLUMN_X), cy(bottomRowY), EVENTS_LIST_Z,
+                events, materials, relativeTime, rowStepY, ITEM_HISTORY_ROTATION_Y_DEGREES, false));
+        buttons.add(itemIconButton(player, cx(ITEM_INFO_COLUMN_X), cy(-1.9), 0.05, icon, live, materialName));
+        buttons.add(infoTextButton(cx(ITEM_INFO_COLUMN_X), cy(1.0), 0.05, infoLines));
+        buttons.add(navButton("back", cx(0), cy(1.6), -0.05, "Zpet", e -> openMainMenu(player)));
 
         ScreenPageData screen = new ScreenPageData(backgroundPage(), buttons, "purrtechlog:detail:" + unit.uuid(), MENU_DISTANCE_PIXELS);
 //        DisplayGuiAPI.closeMenu(player);
@@ -706,19 +732,55 @@ public final class AdminGuiService implements Listener {
                 .build();
     }
 
-    private ButtonData iconButton(double x, double y, double z, ItemStack icon) {
-        ItemDisplayLayerData itemLayer = new ItemDisplayLayerData(0, 0, 0, GUI_PATH, "icon-item", 1)
-                .setItemStack(icon);
-        LayersData design = new LayersData(List.of(itemLayer), GUI_PATH + ":icon", GUI_PATH);
-        return ItemButtonData.itemButtonBuilder()
+    /**
+     * The item page's big item, with a label under it that shows the item's material + display
+     * name while hovered ("když na něj najedu tak mi to bude psát ten daný item a display name") -
+     * DisplayGUI has no hover-only layer, so the label is swapped in/out live via
+     * {@link #findOpenButton}. Label is always present (blank when not hovered) so both designs
+     * share the same layer positions, which {@link Button#updateButton(ButtonData)} requires.
+     */
+    private ButtonData itemIconButton(Player player, double x, double y, double z, ItemStack icon,
+                                      ItemStack live, String materialName) {
+        String name = live != null ? itemLabel(live) : null;
+        List<String> label = new ArrayList<>();
+        label.add(live != null ? live.getType().name() : materialName != null ? materialName : "?");
+        label.add(name != null && !name.equals(live.getType().name()) ? name : "(bez display name)");
+
+        double sizePixels = ITEM_ICON_BLOCKS * PIXELS_PER_BLOCK;
+        return ButtonData.builder()
                 .at(x, y, z)
-                .size(10, 32)
-                .layers(design)
-                .id("icon")
-                .itemLayer(1)
-                .hitboxOffsetZ(hitboxRecessZ(10))
+                .size(sizePixels, sizePixels)
+                .layers(itemIconDesign(icon, List.of(" "), TRANSPARENT))
+                .id(ITEM_ICON_ID)
+                .onHoverStart(ctx -> updateItemIcon(player, icon, label, PANEL_BACKGROUND))
+                .onHoverEnd(ctx -> updateItemIcon(player, icon, List.of(" "), TRANSPARENT))
+                .hitboxOffsetZ(hitboxRecessZ(sizePixels))
                 .build();
     }
+
+    private LayersData itemIconDesign(ItemStack icon, List<String> label, Color labelBackground) {
+        // Item sits above the button's base (its hitbox grows upward from there); the label
+        // hangs below it (+y = down, and a text display grows upward from its anchor).
+        ItemDisplayLayerData item = new ItemDisplayLayerData(0, -ITEM_ICON_BLOCKS / 2.0, 0, GUI_PATH, ITEM_ICON_ID + "-item", 1)
+                .setItemStack(icon);
+        float scale = (float) ITEM_ICON_BLOCKS;
+        item.setScale(new Vector3f(scale, scale, scale));
+        TextDisplayLayerData text = new TextDisplayLayerData(0, 0.6, 0.02, GUI_PATH, ITEM_ICON_ID + "-label", 2)
+                .setText(label)
+                .setBackground(labelBackground);
+        return new LayersData(List.of(item, text), GUI_PATH + ":" + ITEM_ICON_ID, GUI_PATH);
+    }
+
+    private void updateItemIcon(Player player, ItemStack icon, List<String> label, Color labelBackground) {
+        Button button = findOpenButton(player, ITEM_ICON_ID);
+        if (button != null) {
+            button.updateButton(ButtonData.builder()
+                    .layers(itemIconDesign(icon, label, labelBackground))
+                    .id(ITEM_ICON_ID)
+                    .build());
+        }
+    }
+
 
     private ButtonData scrollListButton(String id, double x, double y, double z, List<String> items, String emptyLabel) {
         return scrollListButton(id, x, y, z, 20, 130, 4, items, emptyLabel);
@@ -777,13 +839,6 @@ public final class AdminGuiService implements Listener {
         return (name != null ? name : playerUuidString);
     }
 
-    private static String formatEventLine(EventRecord e) {
-        String line = EventLineFormatter.formatLine(e);
-        if (e.playerUuid() != null) {
-            line = line + " hrac=" + resolvePlayerAlias(e.playerUuid());
-        }
-        return line;
-    }
 
     // === Events browser: all events, newest first, filterable by category and time range. ===
 
@@ -924,7 +979,7 @@ public final class AdminGuiService implements Listener {
      * column sits well off to the right of screen center ("natoč to na hráče").
      */
     private ButtonData eventRowButton(String id, double x, double y, double z, List<String> lines, ItemStack icon,
-                                       Consumer<MenuButtonClickEvent> onClick,
+                                       float rotationY, Consumer<MenuButtonClickEvent> onClick,
                                        Consumer<MenuActionContext> onHoverStart, Consumer<MenuActionContext> onHoverEnd) {
         // Text shifted right by half an icon so text + icon together are centered on the button -
         // the (always centered) hitbox then only needs to be text + icon wide.
@@ -941,7 +996,7 @@ public final class AdminGuiService implements Listener {
         // its own statement (not chained) so `text` below still resolves to the
         // TextDisplayLayerData-only estimate*Blocks() methods. See
         // [[reference-purrtechdisplaygui-coordinate-rules]].
-        text.setRotationY(EVENTS_LIST_ROTATION_Y_DEGREES);
+        text.setRotationY(rotationY);
 
         double textWidthBlocks = text.estimateContentWidthBlocks();
         double textHeightBlocks = text.estimateContentHeightBlocks();
@@ -954,7 +1009,7 @@ public final class AdminGuiService implements Listener {
                 GUI_PATH, id + "-icon", 2)
                 .setItemStack(icon);
         iconLayer.setScale(new Vector3f((float) EVENT_ROW_ICON_BLOCKS, (float) EVENT_ROW_ICON_BLOCKS, (float) EVENT_ROW_ICON_BLOCKS));
-        iconLayer.setRotationY(EVENTS_LIST_ROTATION_Y_DEGREES);
+        iconLayer.setRotationY(rotationY);
 
         double widthPixels = Math.max(HITBOX_MIN_WIDTH_PX,
                 (textWidthBlocks + EVENT_ROW_ICON_BLOCKS) * PIXELS_PER_BLOCK + HITBOX_PADDING_PX);
@@ -999,6 +1054,18 @@ public final class AdminGuiService implements Listener {
      */
     private ButtonData eventsListButton(Player player, double x, double y, double z, List<EventRecord> events,
                                          Map<String, String> materials, EventsFilter filter, double rowSpacingBlocks) {
+        return eventsListButton(player, "events-list", x, y, z, events, materials, filter.relativeTime,
+                rowSpacingBlocks, EVENTS_LIST_ROTATION_Y_DEGREES, true);
+    }
+
+    /**
+     * @param listId       button id - distinct per page (the item page reuses this for its history)
+     * @param hoverPreview whether hovering a row drives the events page's item preview panel
+     */
+    private ButtonData eventsListButton(Player player, String listId, double x, double y, double z,
+                                         List<EventRecord> events, Map<String, String> materials,
+                                         boolean relativeTime, double rowSpacingBlocks, float rotationY,
+                                         boolean hoverPreview) {
         List<ButtonData> rows = new ArrayList<>();
         for (EventRecord ev : events) {
             // Shulker sessions carry the shulker's own color/material in their detail - a placed
@@ -1008,9 +1075,9 @@ public final class AdminGuiService implements Listener {
                     : ev.unitUuid() != null ? materials.get(ev.unitUuid()) : null;
             ItemStack icon = iconFor(materialName);
             rows.add(eventRowButton("event-" + ev.id(), 0, 0, 0.01,
-                    eventRowLines(ev, filter.relativeTime), icon, e -> openEventDetail(player, ev.id()),
-                    ctx -> showEventPreview(player, ev, icon),
-                    ctx -> scheduleEventPreviewHide(player)));
+                    eventRowLines(ev, relativeTime), icon, rotationY, e -> openEventDetail(player, ev.id()),
+                    hoverPreview ? ctx -> showEventPreview(player, ev, icon) : null,
+                    hoverPreview ? ctx -> scheduleEventPreviewHide(player) : null));
         }
 
         double widthPixels = (EVENTS_ROW_TARGET_WIDTH_BLOCKS + EVENT_ROW_ICON_BLOCKS) * PIXELS_PER_BLOCK + HITBOX_PADDING_PX;
@@ -1024,14 +1091,14 @@ public final class AdminGuiService implements Listener {
         // TextDisplayLayerData's normal auto-fit-to-text sizing - same technique as the real
         // DisplayGUI source's own list-frame example (Internal.commands.TestCommand, "playerlist").
         TextDisplayLayerData frame = new TextDisplayLayerData(
-                0, -(EVENTS_VISIBLE_ROWS * rowSpacingBlocks) / 2.0, 0, GUI_PATH, "events-list-frame", 0)
+                0, -(EVENTS_VISIBLE_ROWS * rowSpacingBlocks) / 2.0, 0, GUI_PATH, listId + "-frame", 0)
                 .setText(List.of(" "))
                 .setBackground(PANEL_BACKGROUND);
         frame.setAutoFitText(false);
         frame.setScale(frame.getVectorWithPixels(widthPixels, heightPixels, 1));
         frame.setWidth((float) (widthPixels / PIXELS_PER_BLOCK));
         frame.setHeight((float) (heightPixels / PIXELS_PER_BLOCK));
-        LayersData frameLayers = new LayersData(List.of(frame), GUI_PATH + ":events-list", GUI_PATH);
+        LayersData frameLayers = new LayersData(List.of(frame), GUI_PATH + ":" + listId, GUI_PATH);
 
         // Scroll hitbox: narrower than the frame and recessed so its front face is flush with the
         // list plane - the (unrecessed) row hitboxes then sit fully in front of it.
@@ -1041,7 +1108,7 @@ public final class AdminGuiService implements Listener {
                 .size(scrollHitboxWidthPixels, heightPixels)
                 .hitboxOffsetZ(hitboxRecessZ(scrollHitboxWidthPixels))
                 .layers(frameLayers)
-                .id("events-list")
+                .id(listId)
                 .items(rows)
                 .visibleRows(EVENTS_VISIBLE_ROWS)
                 .rowSpacing(rowSpacingBlocks)
@@ -1330,7 +1397,7 @@ public final class AdminGuiService implements Listener {
     }
 
     private void applyEventPreview(Player player, ItemStack item, List<String> lines, Color background) {
-        Button preview = findEventPreviewButton(player);
+        Button preview = findOpenButton(player, EVENT_PREVIEW_ID);
         if (preview == null) {
             return; // events page no longer open
         }
@@ -1341,13 +1408,16 @@ public final class AdminGuiService implements Listener {
         preview.updateButton(content);
     }
 
-    private static Button findEventPreviewButton(Player player) {
+    /** The live top-level button with this id in the player's currently open menu, or null. Used
+     * to swap a button's content in place ({@link Button#updateButton(ButtonData)}) - DisplayGUI's
+     * public API has no way to change a button after the menu has opened. */
+    private static Button findOpenButton(Player player, String id) {
         ScreenPage page = PurrTechDisplayGUI.getPlugin().getDisplayManager().getPlayersMenu().get(player);
         if (page == null) {
             return null;
         }
         for (Button button : page.getButtons()) {
-            if (EVENT_PREVIEW_ID.equals(button.getData().getId())) {
+            if (id.equals(button.getData().getId())) {
                 return button;
             }
         }
