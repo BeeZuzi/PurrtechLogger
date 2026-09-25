@@ -115,14 +115,50 @@ public final class ItemTrackingService {
             return Optional.empty();
         }
 
-        UUID uuid = UUID.randomUUID();
-        itemTag.writeSingleUnit(item, uuid, def.key());
+        // One unit per physical item, not one per stack - every hand-built merge/split treats
+        // units.size() as the stack's real amount (see StackMath), so a 64-stack tagged with a
+        // single UUID used to collapse to 1 item the first time it was merged.
+        List<UUID> units = mintUnits(templateId, Math.max(1, item.getAmount()), origin);
+        itemTag.writeUnits(item, units, def.key());
+        return Optional.of(units.get(0));
+    }
 
+    /**
+     * Returns every unit on this stack, first topping it up to one unit per physical item if it
+     * carries fewer UUIDs than its amount - stacks genesis'd before genesis minted per item carry a
+     * single UUID for a whole stack, which every hand-built merge would read as a 1-item stack and
+     * silently shrink. Missing units are minted as fresh genesis ({@code origin=STACK_BACKFILL}) and
+     * written onto the stack in place; the caller must write the stack back to its slot if it isn't
+     * a live reference. Untracked stacks, or ones whose template has no DB id yet, are returned
+     * unchanged.
+     */
+    public List<UUID> readAllUnitsNormalized(ItemStack item) {
+        List<UUID> units = itemTag.readUnits(item);
+        int missing = item.getAmount() - units.size();
+        if (units.isEmpty() || missing <= 0) {
+            return units;
+        }
+        String templateKey = itemTag.readTemplateKey(item);
+        Integer templateId = templateKey != null ? registry.idOf(templateKey) : null;
+        if (templateId == null) {
+            return units;
+        }
+        List<UUID> normalized = new ArrayList<>(units);
+        normalized.addAll(mintUnits(templateId, missing, "STACK_BACKFILL"));
+        itemTag.writeUnits(item, normalized, templateKey);
+        return normalized;
+    }
+
+    private List<UUID> mintUnits(int templateId, int count, String origin) {
         long now = System.currentTimeMillis();
-        trackedUnitDao.enqueueUpsert(uuid.toString(), templateId, "ITEM", origin, null, now, true, null, null);
-        eventDao.enqueue(uuid.toString(), "GENESIS", now, null, null, null, null, null, jsonField("origin", origin));
-
-        return Optional.of(uuid);
+        List<UUID> units = new ArrayList<>(count);
+        for (int i = 0; i < count; i++) {
+            UUID uuid = UUID.randomUUID();
+            units.add(uuid);
+            trackedUnitDao.enqueueUpsert(uuid.toString(), templateId, "ITEM", origin, null, now, true, null, null);
+            eventDao.enqueue(uuid.toString(), "GENESIS", now, null, null, null, null, null, jsonField("origin", origin));
+        }
+        return units;
     }
 
     /**
@@ -133,7 +169,9 @@ public final class ItemTrackingService {
      * of {@link #ensureTracked} once merged stacks are possible.
      */
     public List<UUID> ensureTrackedAll(ItemStack item, String origin) {
-        List<UUID> existing = itemTag.readUnits(item);
+        // Every caller writes the item back afterward, so this is also where stacks from the old
+        // one-UUID-per-stack genesis get repaired (chest open, join scan, pickup, ...).
+        List<UUID> existing = readAllUnitsNormalized(item);
         if (!existing.isEmpty()) {
             return existing;
         }

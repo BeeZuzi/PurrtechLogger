@@ -126,7 +126,10 @@ public final class ItemLifecycleListener implements Listener {
                 continue;
             }
             List<UUID> existingUnits = tracking.readAllUnits(existing);
-            if (existingUnits.isEmpty() || !templateKey.equals(tracking.readTemplateKey(existing))) {
+            // Unit count != amount means an old single-UUID-per-stack tag - merging onto it would
+            // set its amount from the unit count and shrink it (see ContainerListener#consistentUnits).
+            if (existingUnits.isEmpty() || existingUnits.size() != existing.getAmount()
+                    || !templateKey.equals(tracking.readTemplateKey(existing))) {
                 continue;
             }
 

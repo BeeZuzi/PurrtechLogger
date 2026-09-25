@@ -131,8 +131,8 @@ public final class ContainerListener implements Listener {
             return false;
         }
 
-        List<UUID> currentUnits = tracking.readAllUnits(current);
-        List<UUID> cursorUnits = tracking.readAllUnits(cursor);
+        List<UUID> currentUnits = consistentUnits(current);
+        List<UUID> cursorUnits = consistentUnits(cursor);
         if (currentUnits.isEmpty() || cursorUnits.isEmpty()) {
             return false; // nothing tracked on at least one side - vanilla handles it fine alone
         }
@@ -188,7 +188,7 @@ public final class ContainerListener implements Listener {
         if (cursor == null || cursor.getType().isAir()) {
             return false;
         }
-        List<UUID> cursorUnits = tracking.readAllUnits(cursor);
+        List<UUID> cursorUnits = consistentUnits(cursor);
         if (cursorUnits.isEmpty()) {
             return false; // untracked - vanilla's own gather already works fine for it
         }
@@ -210,7 +210,7 @@ public final class ContainerListener implements Listener {
             if (item == null || item.getType() != cursor.getType()) {
                 continue;
             }
-            List<UUID> units = tracking.readAllUnits(item);
+            List<UUID> units = consistentUnits(item);
             if (units.isEmpty() || !templateKey.equals(tracking.readTemplateKey(item))) {
                 continue;
             }
@@ -277,7 +277,7 @@ public final class ContainerListener implements Listener {
         if (moving == null || moving.getType().isAir()) {
             return false;
         }
-        List<UUID> movingUnits = tracking.readAllUnits(moving);
+        List<UUID> movingUnits = consistentUnits(moving);
         if (movingUnits.isEmpty()) {
             return false; // untracked - vanilla's own quick-move handles it fine
         }
@@ -301,7 +301,7 @@ public final class ContainerListener implements Listener {
             if (existing == null || existing.getType() != moving.getType()) {
                 continue;
             }
-            List<UUID> existingUnits = tracking.readAllUnits(existing);
+            List<UUID> existingUnits = consistentUnits(existing);
             if (existingUnits.isEmpty() || !templateKey.equals(tracking.readTemplateKey(existing))) {
                 continue;
             }
@@ -362,6 +362,18 @@ public final class ContainerListener implements Listener {
     }
 
     /**
+     * Units on a stack for hand-built merging, or empty (= "leave it to vanilla") if the stack's
+     * UUID count doesn't match its amount. Every merge here sets the result's amount from the unit
+     * count, so a 64-stack still carrying the old single-UUID-per-stack genesis tag would shrink to
+     * 1 item. Such stacks get repaired by {@code ItemTrackingService#ensureTrackedAll} on the next
+     * open/join/pickup scan instead.
+     */
+    private List<UUID> consistentUnits(ItemStack item) {
+        List<UUID> units = tracking.readAllUnits(item);
+        return units.size() == item.getAmount() ? units : List.of();
+    }
+
+    /**
      * Sweeps every slot of the given inventory and merges any tracked stacks that share a
      * template and have room, front-to-back. Only called after a drag now (see {@link #onDrag}) -
      * shift-click and direct-click merging are handled by hand ({@link #tryShiftClick},
@@ -384,7 +396,7 @@ public final class ContainerListener implements Listener {
             if (item == null || item.getType().isAir()) {
                 continue;
             }
-            List<UUID> units = tracking.readAllUnits(item);
+            List<UUID> units = consistentUnits(item);
             if (units.isEmpty()) {
                 continue;
             }
@@ -400,7 +412,7 @@ public final class ContainerListener implements Listener {
             }
 
             ItemStack target = contents[targetSlot];
-            List<UUID> targetUnits = tracking.readAllUnits(target);
+            List<UUID> targetUnits = consistentUnits(target);
             StackMath.MergeResult sliced = StackMath.mergeUnits(
                     toStrings(targetUnits), toStrings(units), target.getMaxStackSize(), units.size());
             if (sliced.destination().size() == targetUnits.size()) {
