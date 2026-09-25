@@ -107,7 +107,9 @@ public final class AdminGuiService implements Listener {
      * [[reference-purrtechdisplaygui-coordinate-rules]]. Sign/magnitude picked from that section's
      * general guidance, NOT yet confirmed in-game - if it turns the wrong way, flip the sign via
      * the in-editor "Rotace" tool or here. */
-    private static final float EVENTS_LIST_ROTATION_Y_DEGREES = -18f; // was -12, "ještě nakloň o trošku"
+    private static final float EVENTS_LIST_ROTATION_Y_DEGREES = -28f; // was -12, "ještě nakloň o trošku"
+    /** Depth of the whole events list (blocks, + = toward the player) - was a hardcoded 0.05. */
+    private static final double EVENTS_LIST_Z = 0.5;
 
     /**
      * Explicit screen size (blocks), applied to every page's background layer so
@@ -851,7 +853,7 @@ public final class AdminGuiService implements Listener {
         // it, built up by rowSpacingBlocks per row) - see eventsListButton - so this is
         // rowStartY shifted down to where the bottom-most visible row sits.
         double bottomRowY = rowStartY + (EVENTS_VISIBLE_ROWS - 1) * rowStepY;
-        buttons.add(eventsListButton(player, cx(columnX), cy(bottomRowY), 0.05, events, materials, filter, rowStepY));
+        buttons.add(eventsListButton(player, cx(columnX), cy(bottomRowY), EVENTS_LIST_Z, events, materials, filter, rowStepY));
 
         // Hover preview panel, right of the list ("Ukazuj ty itemy vpravo") - starts blank, filled
         // in live by showEventPreview when a row is hovered. Bottom-anchored at the list's bottom
@@ -1070,7 +1072,7 @@ public final class AdminGuiService implements Listener {
     private static final double EVENT_PREVIEW_HEIGHT_BLOCKS = 3.0;
     private static final double EVENT_PREVIEW_ITEM_BLOCKS = 0.7;
     /** Angled back toward the player more than the list, since it sits even further right. */
-    private static final float EVENT_PREVIEW_ROTATION_Y_DEGREES = -35f;
+    private static final float EVENT_PREVIEW_ROTATION_Y_DEGREES = -55f;
     /** Depth (blocks, + = toward the player). Was 0.05, same plane as the list - the panel then
      * looked like it sat behind the list ("je pořád z pohledu hráče za tím listem"), so it's
      * pulled forward to sit beside it instead. */
