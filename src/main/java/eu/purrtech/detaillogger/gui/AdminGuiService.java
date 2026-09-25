@@ -109,7 +109,7 @@ public final class AdminGuiService implements Listener {
      * the in-editor "Rotace" tool or here. */
     private static final float EVENTS_LIST_ROTATION_Y_DEGREES = -28f; // was -12, "ještě nakloň o trošku"
     /** Depth of the whole events list (blocks, + = toward the player) - was a hardcoded 0.05. */
-    private static final double EVENTS_LIST_Z = 0.5;
+    private static final double EVENTS_LIST_Z = 0.75;
 
     /**
      * Explicit screen size (blocks), applied to every page's background layer so
@@ -947,7 +947,7 @@ public final class AdminGuiService implements Listener {
         // centered on the text - a text display grows upward from its anchor while an item display
         // is centered on it, hence the -height/2 (this GUI's local +y = down).
         ItemDisplayLayerData iconLayer = new ItemDisplayLayerData(
-                -textWidthBlocks / 2.0, -textHeightBlocks / 2.0, 0,
+                -textWidthBlocks / 2.0 + EVENT_ROW_ICON_PULL_IN_BLOCKS, -textHeightBlocks / 2.0, 0,
                 GUI_PATH, id + "-icon", 2)
                 .setItemStack(icon);
         iconLayer.setScale(new Vector3f((float) EVENT_ROW_ICON_BLOCKS, (float) EVENT_ROW_ICON_BLOCKS, (float) EVENT_ROW_ICON_BLOCKS));
@@ -1062,6 +1062,10 @@ public final class AdminGuiService implements Listener {
 
     /** Rendered size (blocks) of each row's item icon - see {@link #eventRowButton}. */
     private static final double EVENT_ROW_ICON_BLOCKS = 0.45;
+    /** How far (blocks) each row's icon is pulled right, toward its text ("dát spíše blíže k tomu
+     * seznamu"). 0 = icon edge exactly on the ESTIMATED text edge; the estimate runs a bit wide,
+     * which left a visible gap. Bigger = closer; too big and the icon overlaps the text. */
+    private static final double EVENT_ROW_ICON_PULL_IN_BLOCKS = 0.2;
     private static final String EVENT_PREVIEW_ID = "event-preview";
     /** Preview panel center, relative to the list column's center: half the widest row
      * (text + icon), plus a small gap, plus half the panel. Not yet confirmed in-game. */
