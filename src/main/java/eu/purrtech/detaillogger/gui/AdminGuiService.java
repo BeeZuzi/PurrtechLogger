@@ -849,7 +849,7 @@ public final class AdminGuiService implements Listener {
         // Hover preview panel, right of the list ("Ukazuj ty itemy vpravo") - starts blank, filled
         // in live by showEventPreview when a row is hovered. Bottom-anchored at the list's bottom
         // row so it grows upward alongside the list.
-        buttons.add(eventPreviewButton(player, cx(columnX + EVENT_PREVIEW_OFFSET_X), cy(bottomRowY), 0.05));
+        buttons.add(eventPreviewButton(player, cx(columnX + EVENT_PREVIEW_OFFSET_X), cy(bottomRowY), EVENT_PREVIEW_Z));
 
         // Info panel sits directly under the filter column now that the date row moved out - per
         // "vlevo ty filtr tlačítka... dej jim tam více prostoru".
@@ -1062,6 +1062,10 @@ public final class AdminGuiService implements Listener {
     private static final double EVENT_PREVIEW_ITEM_BLOCKS = 0.7;
     /** Angled back toward the player more than the list, since it sits even further right. */
     private static final float EVENT_PREVIEW_ROTATION_Y_DEGREES = -35f;
+    /** Depth (blocks, + = toward the player). Was 0.05, same plane as the list - the panel then
+     * looked like it sat behind the list ("je pořád z pohledu hráče za tím listem"), so it's
+     * pulled forward to sit beside it instead. */
+    private static final double EVENT_PREVIEW_Z = 1.0;
     /** "tam bude ještě 2 sekundy a pak to zmizne" */
     private static final long EVENT_PREVIEW_LINGER_TICKS = 40;
     private static final Color TRANSPARENT = Color.fromARGB(0, 0, 0, 0);
