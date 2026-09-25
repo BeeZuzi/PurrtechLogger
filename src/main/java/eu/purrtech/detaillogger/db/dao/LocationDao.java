@@ -29,6 +29,38 @@ public final class LocationDao {
     }
 
     /**
+     * Blocking read - must be called off the main thread. The unit's last known location, or null
+     * if it was never located.
+     */
+    public UnitLocationRecord findByUnit(String unitUuid) throws SQLException {
+        MainThreadCheck.assertAsync();
+        Connection connection = borrow();
+        try (PreparedStatement ps = connection.prepareStatement("""
+                SELECT location_type, player_uuid, slot, world, x, y, z, container_type, menu_name
+                FROM locations WHERE unit_uuid = ?
+                """)) {
+            ps.setString(1, unitUuid);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (!rs.next()) {
+                    return null;
+                }
+                return new UnitLocationRecord(
+                        rs.getString("location_type"),
+                        rs.getString("player_uuid"),
+                        nullableInt(rs, "slot"),
+                        rs.getString("world"),
+                        nullableInt(rs, "x"),
+                        nullableInt(rs, "y"),
+                        nullableInt(rs, "z"),
+                        rs.getString("container_type"),
+                        rs.getString("menu_name"));
+            }
+        } finally {
+            database.readPool().release(connection);
+        }
+    }
+
+    /**
      * Blocking read - must be called off the main thread. Used to (re)populate
      * {@code BlockIdentityIndex} for a single chunk on load, so plain-block identity never has to
      * live in memory beyond currently loaded chunks.
@@ -70,6 +102,11 @@ public final class LocationDao {
         } finally {
             database.readPool().release(connection);
         }
+    }
+
+    private static Integer nullableInt(ResultSet rs, String column) throws SQLException {
+        int value = rs.getInt(column);
+        return rs.wasNull() ? null : value;
     }
 
     private Connection borrow() throws SQLException {

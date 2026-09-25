@@ -4,14 +4,18 @@ import eu.purrtech.detaillogger.db.dao.DupeAlertDao;
 import eu.purrtech.detaillogger.db.dao.DupeAlertRecord;
 import eu.purrtech.detaillogger.db.dao.EventDao;
 import eu.purrtech.detaillogger.db.dao.EventRecord;
+import eu.purrtech.detaillogger.db.dao.LocationDao;
 import eu.purrtech.detaillogger.db.dao.PlayerRecord;
 import eu.purrtech.detaillogger.db.dao.TemplateDao;
 import eu.purrtech.detaillogger.db.dao.TrackedUnitRecord;
+import eu.purrtech.detaillogger.db.dao.UnitLocationRecord;
 import eu.purrtech.detaillogger.tracking.HistoryService;
+import eu.purrtech.detaillogger.tracking.ItemTrackingService;
 import eu.purrtech.detaillogger.tracking.NearbyPlayers;
 import eu.purrtech.detaillogger.tracking.PlayerDirectoryService;
 import eu.purrtech.detaillogger.util.EventLineFormatter;
 import eu.purrtech.displaygui.API.PageType;
+import eu.purrtech.displaygui.API.actions.MenuActionContext;
 import eu.purrtech.displaygui.API.data.buttonData.ButtonData;
 import eu.purrtech.displaygui.API.data.buttonData.ButtonListScrollButtonData;
 import eu.purrtech.displaygui.API.data.buttonData.ItemButtonData;
@@ -24,7 +28,9 @@ import eu.purrtech.displaygui.API.data.screenPageData.PageData;
 import eu.purrtech.displaygui.API.data.screenPageData.ScreenPageData;
 import eu.purrtech.displaygui.API.events.MenuButtonClickEvent;
 import eu.purrtech.displaygui.Internal.PurrTechDisplayGUI;
+import eu.purrtech.displaygui.Internal.buttons.Button;
 import eu.purrtech.displaygui.Internal.manager.DisplayManager;
+import eu.purrtech.displaygui.Internal.utils.ScreenPage;
 import io.papermc.paper.event.player.AsyncChatEvent;
 import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 import org.bukkit.Bukkit;
@@ -33,11 +39,18 @@ import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.OfflinePlayer;
 import org.bukkit.World;
+import org.bukkit.block.BlockState;
+import org.bukkit.block.Container;
+import org.bukkit.enchantments.Enchantment;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
+import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.ItemStack;
+import org.bukkit.inventory.meta.EnchantmentStorageMeta;
+import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.plugin.Plugin;
+import org.bukkit.scheduler.BukkitTask;
 import org.joml.Vector3f;
 import eu.purrtech.displaygui.API.DisplayGuiAPI;
 
@@ -51,6 +64,7 @@ import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -227,6 +241,13 @@ public final class AdminGuiService implements Listener {
     private final DupeAlertDao dupeAlertDao;
     private final PlayerDirectoryService playerDirectory;
     private final EventDao eventDao;
+    private final LocationDao locationDao;
+    private final ItemTrackingService itemTracking;
+    /** Per-player state of the events page's hover item preview - see {@link #showEventPreview}. */
+    private final Map<UUID, PreviewState> previewStates = new ConcurrentHashMap<>();
+    /** DB-side preview info per unit UUID, cached for the current events page only (cleared
+     * whenever the events page is rebuilt) so hovering back and forth doesn't re-query. */
+    private final Map<String, UnitPreviewData> unitPreviewCache = new ConcurrentHashMap<>();
     private final Plugin plugin;
     private final Logger logger;
     private final Map<UUID, SearchMode> awaitingSearchInput = new ConcurrentHashMap<>();
@@ -241,7 +262,10 @@ public final class AdminGuiService implements Listener {
     private final Map<UUID, Runnable> lastPage = new ConcurrentHashMap<>();
 
     public AdminGuiService(HistoryService historyService, TemplateDao templateDao, DupeAlertDao dupeAlertDao,
-                            PlayerDirectoryService playerDirectory, EventDao eventDao, Plugin plugin, Logger logger) {
+                            PlayerDirectoryService playerDirectory, EventDao eventDao, LocationDao locationDao,
+                            ItemTrackingService itemTracking, Plugin plugin, Logger logger) {
+        this.locationDao = locationDao;
+        this.itemTracking = itemTracking;
         this.historyService = historyService;
         this.templateDao = templateDao;
         this.dupeAlertDao = dupeAlertDao;
@@ -758,7 +782,10 @@ public final class AdminGuiService implements Listener {
         Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
             try {
                 List<EventRecord> events = eventDao.findFiltered(types, filter.from, filter.to, EVENTS_LIST_LIMIT);
-                Bukkit.getScheduler().runTask(plugin, () -> openEventsListPage(player, filter, events));
+                // Row icons - one batched lookup instead of one query per row.
+                Map<String, String> materials = templateDao.findMaterialsByUnits(events.stream()
+                        .map(EventRecord::unitUuid).filter(java.util.Objects::nonNull).distinct().toList());
+                Bukkit.getScheduler().runTask(plugin, () -> openEventsListPage(player, filter, events, materials));
             } catch (SQLException e) {
                 logger.severe("Admin GUI nacteni udalosti selhalo: " + e);
                 Bukkit.getScheduler().runTask(plugin, () -> player.sendMessage("Lookup selhal, viz konzole."));
@@ -766,8 +793,11 @@ public final class AdminGuiService implements Listener {
         });
     }
 
-    private void openEventsListPage(Player player, EventsFilter filter, List<EventRecord> events) {
+    private void openEventsListPage(Player player, EventsFilter filter, List<EventRecord> events,
+                                    Map<String, String> materials) {
         List<ButtonData> buttons = new ArrayList<>();
+        resetEventPreview(player);
+        unitPreviewCache.clear();
 
         List<String> categoryButtons = new ArrayList<>();
         categoryButtons.add("ALL");
@@ -803,7 +833,9 @@ public final class AdminGuiService implements Listener {
         // slice with prev/next buttons - the player scrolls the list with the mouse wheel. Same
         // right-of-center column position as before ("dej to více doprava a níže"). See
         // [[reference-purrtechdisplaygui-coordinate-rules]].
-        double columnX = 2.6;
+        // Was 2.6 - moved 0.75 right ("posuň to tak třeba o 0.5-1.0 doprava") to make room for the
+        // item icon now drawn on each row's left side.
+        double columnX = 3.35;
         // Was -0.2 - raised so the bottom row no longer clips into the ground ("jedna ta událost
         // dole se buguje do země").
         double rowStartY = -1.0;
@@ -812,7 +844,12 @@ public final class AdminGuiService implements Listener {
         // it, built up by rowSpacingBlocks per row) - see eventsListButton - so this is
         // rowStartY shifted down to where the bottom-most visible row sits.
         double bottomRowY = rowStartY + (EVENTS_VISIBLE_ROWS - 1) * rowStepY;
-        buttons.add(eventsListButton(player, cx(columnX), cy(bottomRowY), 0.05, events, filter, rowStepY));
+        buttons.add(eventsListButton(player, cx(columnX), cy(bottomRowY), 0.05, events, materials, filter, rowStepY));
+
+        // Hover preview panel, right of the list ("Ukazuj ty itemy vpravo") - starts blank, filled
+        // in live by showEventPreview when a row is hovered. Bottom-anchored at the list's bottom
+        // row so it grows upward alongside the list.
+        buttons.add(eventPreviewButton(player, cx(columnX + EVENT_PREVIEW_OFFSET_X), cy(bottomRowY), 0.05));
 
         // Info panel sits directly under the filter column now that the date row moved out - per
         // "vlevo ty filtr tlačítka... dej jim tam více prostoru".
@@ -872,8 +909,9 @@ public final class AdminGuiService implements Listener {
      * Rotated by {@link #EVENTS_LIST_ROTATION_Y_DEGREES} to angle back toward the player, since this
      * column sits well off to the right of screen center ("natoč to na hráče").
      */
-    private ButtonData eventRowButton(String id, double x, double y, double z, List<String> lines,
-                                       Consumer<MenuButtonClickEvent> onClick) {
+    private ButtonData eventRowButton(String id, double x, double y, double z, List<String> lines, ItemStack icon,
+                                       Consumer<MenuButtonClickEvent> onClick,
+                                       Consumer<MenuActionContext> onHoverStart, Consumer<MenuActionContext> onHoverEnd) {
         TextDisplayLayerData text = new TextDisplayLayerData(0, 0, 0, GUI_PATH, id + "-text", 1)
                 .setText(lines)
                 .setBackground(BUTTON_BACKGROUND);
@@ -889,11 +927,26 @@ public final class AdminGuiService implements Listener {
         // [[reference-purrtechdisplaygui-coordinate-rules]].
         text.setRotationY(EVENTS_LIST_ROTATION_Y_DEGREES);
 
+        double textWidthBlocks = text.estimateContentWidthBlocks();
+        double textHeightBlocks = text.estimateContentHeightBlocks();
+
+        // Item icon on the row's left ("na levou stranu toho ještě přidej ten item"), vertically
+        // centered on the text - a text display grows upward from its anchor while an item display
+        // is centered on it, hence the -height/2 (this GUI's local +y = down).
+        ItemDisplayLayerData iconLayer = new ItemDisplayLayerData(
+                -(textWidthBlocks / 2.0 + EVENT_ROW_ICON_BLOCKS / 2.0), -textHeightBlocks / 2.0, 0,
+                GUI_PATH, id + "-icon", 2)
+                .setItemStack(icon);
+        iconLayer.setScale(new Vector3f((float) EVENT_ROW_ICON_BLOCKS, (float) EVENT_ROW_ICON_BLOCKS, (float) EVENT_ROW_ICON_BLOCKS));
+        iconLayer.setRotationY(EVENTS_LIST_ROTATION_Y_DEGREES);
+
+        // Hitbox stays centered on the text (Interaction can't be offset sideways), so it's widened
+        // by the icon on both sides to still cover the icon.
         double widthPixels = Math.max(HITBOX_MIN_WIDTH_PX,
-                text.estimateContentWidthBlocks() * PIXELS_PER_BLOCK + HITBOX_PADDING_PX);
+                (textWidthBlocks + 2 * EVENT_ROW_ICON_BLOCKS) * PIXELS_PER_BLOCK + HITBOX_PADDING_PX);
         double heightPixels = Math.max(HITBOX_HEIGHT_PX,
-                text.estimateContentHeightBlocks() * PIXELS_PER_BLOCK + HITBOX_PADDING_PX);
-        LayersData design = new LayersData(List.of(text), GUI_PATH + ":" + id, GUI_PATH);
+                textHeightBlocks * PIXELS_PER_BLOCK + HITBOX_PADDING_PX);
+        LayersData design = new LayersData(List.of(text, iconLayer), GUI_PATH + ":" + id, GUI_PATH);
         // No hitboxRecessZ here, unlike every other button: these rows live inside
         // eventsListButton, whose own full-viewport scroll hitbox sits behind them - a recessed row
         // hitbox would end up behind that one and never get hovered/clicked. Left at its normal
@@ -904,6 +957,8 @@ public final class AdminGuiService implements Listener {
                 .layers(design)
                 .id(id)
                 .onLeftClick(onClick)
+                .onHoverStart(onHoverStart)
+                .onHoverEnd(onHoverEnd)
                 .build();
     }
 
@@ -927,11 +982,15 @@ public final class AdminGuiService implements Listener {
      * in the real DisplayGUI source - see [[reference-purrtechdisplaygui-coordinate-rules]].
      */
     private ButtonData eventsListButton(Player player, double x, double y, double z, List<EventRecord> events,
-                                         EventsFilter filter, double rowSpacingBlocks) {
+                                         Map<String, String> materials, EventsFilter filter, double rowSpacingBlocks) {
         List<ButtonData> rows = new ArrayList<>();
         for (EventRecord ev : events) {
+            String materialName = ev.unitUuid() != null ? materials.get(ev.unitUuid()) : null;
+            ItemStack icon = iconFor(materialName);
             rows.add(eventRowButton("event-" + ev.id(), 0, 0, 0.01,
-                    eventRowLines(ev, filter.relativeTime), e -> openEventDetail(player, ev.id())));
+                    eventRowLines(ev, filter.relativeTime), icon, e -> openEventDetail(player, ev.id()),
+                    ctx -> showEventPreview(player, ev, icon),
+                    ctx -> scheduleEventPreviewHide(player)));
         }
 
         double widthPixels = EVENTS_ROW_TARGET_WIDTH_BLOCKS * PIXELS_PER_BLOCK + HITBOX_PADDING_PX;
@@ -982,6 +1041,315 @@ public final class AdminGuiService implements Listener {
                 ? "world: " + e.world() + " " + e.x() + " " + e.y() + " " + e.z()
                 : "world: neznamy";
         return List.of(line1, line2);
+    }
+
+    // === Events page hover item preview - hovering a row shows the item it's about in a panel
+    // right of the list ("Ukazuj ty itemy vpravo"); it lingers 2 s after leaving the row so the
+    // player can move onto it, and clicking it opens that item's detail + full history. ===
+
+    /** Rendered size (blocks) of each row's item icon - see {@link #eventRowButton}. */
+    private static final double EVENT_ROW_ICON_BLOCKS = 0.45;
+    private static final String EVENT_PREVIEW_ID = "event-preview";
+    /** Preview panel center, relative to the list column's center: half the widest row
+     * (text + icon), plus a small gap, plus half the panel. Not yet confirmed in-game. */
+    private static final double EVENT_PREVIEW_OFFSET_X = 3.8;
+    private static final double EVENT_PREVIEW_WIDTH_BLOCKS = 2.8;
+    private static final double EVENT_PREVIEW_HEIGHT_BLOCKS = 3.0;
+    private static final double EVENT_PREVIEW_ITEM_BLOCKS = 0.7;
+    /** Angled back toward the player more than the list, since it sits even further right. */
+    private static final float EVENT_PREVIEW_ROTATION_Y_DEGREES = -25f;
+    /** "tam bude ještě 2 sekundy a pak to zmizne" */
+    private static final long EVENT_PREVIEW_LINGER_TICKS = 40;
+    private static final Color TRANSPARENT = Color.fromARGB(0, 0, 0, 0);
+
+    private static final class PreviewState {
+        /** Event id whose preview is shown (or loading), null = panel blank. */
+        private String shownKey;
+        /** Unit behind the shown preview, null = nothing clickable (blank or no-item barrier). */
+        private String unitUuid;
+        private boolean hoveringPreview;
+        private BukkitTask hideTask;
+    }
+
+    /** DB-side facts for a unit's preview; {@code unit} null = UUID not found in the DB. */
+    private record UnitPreviewData(TrackedUnitRecord unit, String material, UnitLocationRecord location,
+                                   int eventCount) {
+    }
+
+    private static ItemStack iconFor(String materialName) {
+        Material material = materialName != null ? Material.matchMaterial(materialName) : null;
+        return new ItemStack(material != null && material.isItem() ? material : Material.BARRIER);
+    }
+
+    /** The (initially blank) preview panel - see {@link #showEventPreview}. */
+    private ButtonData eventPreviewButton(Player player, double x, double y, double z) {
+        double widthPixels = EVENT_PREVIEW_WIDTH_BLOCKS * PIXELS_PER_BLOCK;
+        return ButtonData.builder()
+                .at(x, y, z)
+                .size(widthPixels, EVENT_PREVIEW_HEIGHT_BLOCKS * PIXELS_PER_BLOCK)
+                .layers(eventPreviewDesign(null, List.of(" "), TRANSPARENT))
+                .id(EVENT_PREVIEW_ID)
+                .onLeftClick(e -> openPreviewedItem(player))
+                .onHoverStart(ctx -> {
+                    PreviewState state = previewStates.computeIfAbsent(player.getUniqueId(), id -> new PreviewState());
+                    state.hoveringPreview = true;
+                    cancelEventPreviewHide(state);
+                })
+                .onHoverEnd(ctx -> {
+                    PreviewState state = previewStates.get(player.getUniqueId());
+                    if (state != null) {
+                        state.hoveringPreview = false;
+                        scheduleEventPreviewHide(player, state);
+                    }
+                })
+                .hitboxOffsetZ(hitboxRecessZ(widthPixels))
+                .build();
+    }
+
+    /** Text (position 1) with the item (position 2) above it. Always the same two positions so
+     * {@link Button#updateButton(ButtonData)} can swap content in place without respawning. */
+    private LayersData eventPreviewDesign(ItemStack item, List<String> lines, Color background) {
+        TextDisplayLayerData text = new TextDisplayLayerData(0, 0, 0, GUI_PATH, EVENT_PREVIEW_ID + "-text", 1)
+                .setText(lines)
+                .setBackground(background);
+        text.setAutoFitText(false);
+        double naturalWidthBlocks = text.estimateContentWidthBlocks();
+        if (naturalWidthBlocks > EVENT_PREVIEW_WIDTH_BLOCKS) {
+            float scale = (float) Math.max(COMPACT_MIN_TEXT_SCALE, EVENT_PREVIEW_WIDTH_BLOCKS / naturalWidthBlocks);
+            text.setScale(new Vector3f(scale, scale, 1f));
+        }
+        text.setRotationY(EVENT_PREVIEW_ROTATION_Y_DEGREES);
+        double textHeightBlocks = text.estimateContentHeightBlocks();
+
+        ItemDisplayLayerData itemLayer = new ItemDisplayLayerData(
+                0, -(textHeightBlocks + EVENT_PREVIEW_ITEM_BLOCKS / 2.0 + 0.1), 0,
+                GUI_PATH, EVENT_PREVIEW_ID + "-item", 2)
+                .setItemStack(item != null ? item : new ItemStack(Material.AIR));
+        float itemScale = (float) EVENT_PREVIEW_ITEM_BLOCKS;
+        itemLayer.setScale(new Vector3f(itemScale, itemScale, itemScale));
+        itemLayer.setRotationY(EVENT_PREVIEW_ROTATION_Y_DEGREES);
+        return new LayersData(List.of(text, itemLayer), GUI_PATH + ":" + EVENT_PREVIEW_ID, GUI_PATH);
+    }
+
+    /** Row hover start: show this event's item right away, replacing whatever was shown. */
+    private void showEventPreview(Player player, EventRecord ev, ItemStack rowIcon) {
+        PreviewState state = previewStates.computeIfAbsent(player.getUniqueId(), id -> new PreviewState());
+        cancelEventPreviewHide(state);
+        String key = String.valueOf(ev.id());
+        if (key.equals(state.shownKey)) {
+            return;
+        }
+        state.shownKey = key;
+        state.unitUuid = ev.unitUuid();
+
+        if (ev.unitUuid() == null) {
+            applyEventPreview(player, new ItemStack(Material.BARRIER),
+                    List.of("Udalost #" + ev.id(), "Tento event neobsahuje", "zadny item."), PANEL_BACKGROUND);
+            return;
+        }
+        String unitUuid = ev.unitUuid();
+        UnitPreviewData cached = unitPreviewCache.get(unitUuid);
+        if (cached != null) {
+            renderUnitPreview(player, unitUuid, cached, rowIcon);
+            return;
+        }
+        applyEventPreview(player, rowIcon, List.of("Nacitam...", unitUuid), PANEL_BACKGROUND);
+        Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+            try {
+                Optional<HistoryService.UnitHistory> history = historyService.lookup(unitUuid);
+                TrackedUnitRecord unit = history.map(HistoryService.UnitHistory::unit).orElse(null);
+                String material = unit != null ? templateDao.findMaterialById(unit.templateId()) : null;
+                UnitLocationRecord location = locationDao.findByUnit(unitUuid);
+                int eventCount = history.map(h -> h.events().size()).orElse(0);
+                UnitPreviewData data = new UnitPreviewData(unit, material, location, eventCount);
+                unitPreviewCache.put(unitUuid, data);
+                Bukkit.getScheduler().runTask(plugin, () -> {
+                    if (key.equals(state.shownKey)) { // player may have moved on meanwhile
+                        renderUnitPreview(player, unitUuid, data, rowIcon);
+                    }
+                });
+            } catch (SQLException e) {
+                logger.severe("Admin GUI nacteni nahledu itemu selhalo: " + e);
+            }
+        });
+    }
+
+    private void renderUnitPreview(Player player, String unitUuid, UnitPreviewData data, ItemStack rowIcon) {
+        // Amount/enchants/name aren't stored in the DB - they're read off the real item wherever
+        // it last was, if that's currently loaded (online player / loaded chunk).
+        ItemStack live = findLiveItem(unitUuid, data.location());
+        List<String> lines = new ArrayList<>();
+        lines.add(itemTitle(live, data.material()));
+        lines.add("UUID: " + unitUuid);
+        lines.add("Material: " + (data.material() != null ? data.material() : "?"));
+        if (live != null) {
+            lines.add("Mnozstvi: " + live.getAmount() + " ks ve stacku");
+            lines.add("Enchanty: " + formatEnchants(live));
+        } else {
+            lines.add("Mnozstvi/enchanty: ? (item neni nacteny)");
+        }
+        TrackedUnitRecord unit = data.unit();
+        if (unit != null) {
+            lines.add("Stav: " + (unit.alive() ? "existuje" : "znicen (" + unit.destroyedCause() + ")"));
+            lines.add("Vznik: " + formatTime(unit.genesisAt()) + " (" + unit.origin() + ")");
+        } else {
+            lines.add("Stav: neni v DB");
+        }
+        lines.add("Poloha: " + formatUnitLocation(data.location()));
+        lines.add("Udalosti: " + data.eventCount());
+        lines.add("> Klikni pro detail a historii");
+        applyEventPreview(player, live != null ? live : rowIcon, lines, PANEL_BACKGROUND);
+    }
+
+    private static String itemTitle(ItemStack live, String material) {
+        if (live != null) {
+            ItemMeta meta = live.getItemMeta();
+            if (meta != null && meta.hasDisplayName() && meta.displayName() != null) {
+                return PlainTextComponentSerializer.plainText().serialize(meta.displayName());
+            }
+            return live.getType().name();
+        }
+        return material != null ? material : "Neznamy item";
+    }
+
+    private static String formatEnchants(ItemStack item) {
+        Map<Enchantment, Integer> enchants = new HashMap<>(item.getEnchantments());
+        if (item.getItemMeta() instanceof EnchantmentStorageMeta stored) {
+            enchants.putAll(stored.getStoredEnchants());
+        }
+        if (enchants.isEmpty()) {
+            return "zadne";
+        }
+        List<String> parts = new ArrayList<>();
+        enchants.forEach((enchant, level) -> parts.add(enchant.getKey().getKey() + " " + level));
+        return String.join(", ", parts);
+    }
+
+    private static String formatUnitLocation(UnitLocationRecord loc) {
+        if (loc == null) {
+            return "neznama";
+        }
+        String coords = loc.world() != null ? loc.world() + " " + loc.x() + " " + loc.y() + " " + loc.z() : "";
+        String slot = loc.slot() != null ? " slot " + loc.slot() : "";
+        return switch (loc.locationType()) {
+            case "PLAYER_INVENTORY" -> "inventar " + resolvePlayerAlias(loc.playerUuid()) + slot;
+            case "ENDER_CHEST" -> "ender chest " + resolvePlayerAlias(loc.playerUuid()) + slot;
+            case "BLOCK_CONTAINER" -> (loc.containerType() != null ? loc.containerType() : "kontejner") + " " + coords + slot;
+            case "GROUND" -> "na zemi " + coords;
+            case "PLACED_BLOCK" -> "polozeny blok " + coords;
+            case "PLACED_INTO_MENU" -> "menu " + loc.menuName() + slot;
+            default -> loc.locationType() + (coords.isEmpty() ? "" : " " + coords) + slot;
+        };
+    }
+
+    /** The real item at the unit's last known location, only if it's loaded right now and still
+     * carries this unit's UUID; never loads a chunk. Null otherwise. Main thread only. */
+    private ItemStack findLiveItem(String unitUuid, UnitLocationRecord loc) {
+        if (loc == null || loc.slot() == null) {
+            return null;
+        }
+        Inventory inventory = switch (loc.locationType()) {
+            case "PLAYER_INVENTORY", "ENDER_CHEST" -> {
+                Player owner = loc.playerUuid() != null ? Bukkit.getPlayer(UUID.fromString(loc.playerUuid())) : null;
+                if (owner == null) {
+                    yield null;
+                }
+                yield loc.locationType().equals("ENDER_CHEST") ? owner.getEnderChest() : owner.getInventory();
+            }
+            case "BLOCK_CONTAINER" -> {
+                World world = loc.world() != null ? Bukkit.getWorld(loc.world()) : null;
+                if (world == null || loc.x() == null || loc.y() == null || loc.z() == null
+                        || !world.isChunkLoaded(loc.x() >> 4, loc.z() >> 4)) {
+                    yield null;
+                }
+                BlockState blockState = world.getBlockAt(loc.x(), loc.y(), loc.z()).getState(false);
+                yield blockState instanceof Container container ? container.getInventory() : null;
+            }
+            default -> null;
+        };
+        if (inventory == null || loc.slot() < 0 || loc.slot() >= inventory.getSize()) {
+            return null;
+        }
+        ItemStack item = inventory.getItem(loc.slot());
+        if (item == null || item.getType().isAir()
+                || !itemTracking.readAllUnits(item).contains(UUID.fromString(unitUuid))) {
+            return null;
+        }
+        return item.clone();
+    }
+
+    private void applyEventPreview(Player player, ItemStack item, List<String> lines, Color background) {
+        Button preview = findEventPreviewButton(player);
+        if (preview == null) {
+            return; // events page no longer open
+        }
+        ButtonData content = ButtonData.builder()
+                .layers(eventPreviewDesign(item, lines, background))
+                .id(EVENT_PREVIEW_ID)
+                .build();
+        preview.updateButton(content);
+    }
+
+    private static Button findEventPreviewButton(Player player) {
+        ScreenPage page = PurrTechDisplayGUI.getPlugin().getDisplayManager().getPlayersMenu().get(player);
+        if (page == null) {
+            return null;
+        }
+        for (Button button : page.getButtons()) {
+            if (EVENT_PREVIEW_ID.equals(button.getData().getId())) {
+                return button;
+            }
+        }
+        return null;
+    }
+
+    /** Leaving a row or the panel: blank the panel after the linger delay, unless the player is
+     * on the panel itself or another row replaces it first (which cancels this). */
+    private void scheduleEventPreviewHide(Player player) {
+        PreviewState state = previewStates.get(player.getUniqueId());
+        if (state != null && !state.hoveringPreview) {
+            scheduleEventPreviewHide(player, state);
+        }
+    }
+
+    private void scheduleEventPreviewHide(Player player, PreviewState state) {
+        cancelEventPreviewHide(state);
+        if (state.shownKey == null) {
+            return;
+        }
+        state.hideTask = Bukkit.getScheduler().runTaskLater(plugin, () -> {
+            state.hideTask = null;
+            state.shownKey = null;
+            state.unitUuid = null;
+            applyEventPreview(player, null, List.of(" "), TRANSPARENT);
+        }, EVENT_PREVIEW_LINGER_TICKS);
+    }
+
+    private static void cancelEventPreviewHide(PreviewState state) {
+        if (state.hideTask != null) {
+            state.hideTask.cancel();
+            state.hideTask = null;
+        }
+    }
+
+    private void resetEventPreview(Player player) {
+        PreviewState state = previewStates.remove(player.getUniqueId());
+        if (state != null) {
+            cancelEventPreviewHide(state);
+        }
+    }
+
+    private void openPreviewedItem(Player player) {
+        PreviewState state = previewStates.get(player.getUniqueId());
+        if (state == null || state.shownKey == null) {
+            return;
+        }
+        if (state.unitUuid == null) {
+            player.sendMessage("Tento event neobsahuje zadny item.");
+            return;
+        }
+        resetEventPreview(player);
+        openDetail(player, state.unitUuid);
     }
 
     // === Event detail page: who/what/where for a single event, opened by clicking its row on the

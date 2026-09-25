@@ -76,6 +76,42 @@ public final class TemplateDao {
         }
     }
 
+    /**
+     * Blocking read - must be called off the main thread. Template material for each given tracked
+     * unit UUID (units that don't exist are simply absent from the result). Used by the admin
+     * events list to draw each row's item icon without one query per row.
+     */
+    public Map<String, String> findMaterialsByUnits(List<String> unitUuids) throws SQLException {
+        MainThreadCheck.assertAsync();
+        Map<String, String> result = new HashMap<>();
+        if (unitUuids.isEmpty()) {
+            return result;
+        }
+        Connection connection = borrow();
+        try {
+            // Chunked - SQLite caps the number of bound parameters per statement.
+            for (int from = 0; from < unitUuids.size(); from += 500) {
+                List<String> chunk = unitUuids.subList(from, Math.min(from + 500, unitUuids.size()));
+                String placeholders = String.join(",", chunk.stream().map(k -> "?").toList());
+                try (PreparedStatement ps = connection.prepareStatement(
+                        "SELECT u.uuid, t.material FROM tracked_units u JOIN templates t ON t.id = u.template_id"
+                                + " WHERE u.uuid IN (" + placeholders + ")")) {
+                    for (int i = 0; i < chunk.size(); i++) {
+                        ps.setString(i + 1, chunk.get(i));
+                    }
+                    try (ResultSet rs = ps.executeQuery()) {
+                        while (rs.next()) {
+                            result.put(rs.getString("uuid"), rs.getString("material"));
+                        }
+                    }
+                }
+            }
+            return result;
+        } finally {
+            database.readPool().release(connection);
+        }
+    }
+
     private Connection borrow() throws SQLException {
         try {
             return database.readPool().borrow();

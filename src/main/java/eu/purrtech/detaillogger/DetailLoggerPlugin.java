@@ -89,7 +89,7 @@ public final class DetailLoggerPlugin extends JavaPlugin {
         getServer().getPluginManager().registerEvents(new BlockLifecycleListener(blockTracking, entityTag, this), this);
 
         AdminGuiService adminGuiService = setupDisplayGuiIntegration(
-                templateDao, eventDao, dupeAlertDao, historyService, playerDirectory);
+                templateDao, eventDao, dupeAlertDao, historyService, playerDirectory, locationDao, itemTracking);
 
         var purrLogCommand = new PurrLogCommand(this, trackedUnitDao, eventDao, templateRegistry,
                 templatesFile, historyService, dupeAlertDao, sweepTask, adminGuiService, playerDirectory);
@@ -124,13 +124,15 @@ public final class DetailLoggerPlugin extends JavaPlugin {
      */
     private AdminGuiService setupDisplayGuiIntegration(TemplateDao templateDao, EventDao eventDao,
                                                          DupeAlertDao dupeAlertDao, HistoryService historyService,
-                                                         PlayerDirectoryService playerDirectory) {
+                                                         PlayerDirectoryService playerDirectory,
+                                                         LocationDao locationDao, ItemTrackingService itemTracking) {
         if (!getServer().getPluginManager().isPluginEnabled("PurrTechDisplayGUI")) {
             getLogger().info("PurrTechDisplayGUI nenalezeno - admin GUI (/purrlog gui) a [purrtechlog] akce nejsou k dispozici.");
             return null;
         }
         AdminGuiService adminGuiService = new AdminGuiService(
-                historyService, templateDao, dupeAlertDao, playerDirectory, eventDao, this, getLogger());
+                historyService, templateDao, dupeAlertDao, playerDirectory, eventDao, locationDao, itemTracking,
+                this, getLogger());
         getServer().getPluginManager().registerEvents(adminGuiService, this);
         MenuViewLoggingAction.register(eventDao);
         getLogger().info("DisplayGUI integrace aktivni (/purrlog gui, [purrtechlog] akce).");
