@@ -804,12 +804,13 @@ public final class AdminGuiService implements Listener {
         // right-of-center column position as before ("dej to více doprava a níže"). See
         // [[reference-purrtechdisplaygui-coordinate-rules]].
         double columnX = 2.6;
-        double rowStartY = -0.2;
+        // Was -0.2 - raised so the bottom row no longer clips into the ground ("jedna ta událost
+        // dole se buguje do země").
+        double rowStartY = -1.0;
         double rowStepY = 0.65;
         // The list's own .at() anchor is documented to be the BOTTOM row (row 0/topmost sits above
         // it, built up by rowSpacingBlocks per row) - see eventsListButton - so this is
-        // rowStartY shifted down to where the bottom-most visible row used to sit under the old
-        // manual pagination, keeping the column's on-screen position unchanged.
+        // rowStartY shifted down to where the bottom-most visible row sits.
         double bottomRowY = rowStartY + (EVENTS_VISIBLE_ROWS - 1) * rowStepY;
         buttons.add(eventsListButton(player, cx(columnX), cy(bottomRowY), 0.05, events, filter, rowStepY));
 
@@ -893,15 +894,22 @@ public final class AdminGuiService implements Listener {
         double heightPixels = Math.max(HITBOX_HEIGHT_PX,
                 text.estimateContentHeightBlocks() * PIXELS_PER_BLOCK + HITBOX_PADDING_PX);
         LayersData design = new LayersData(List.of(text), GUI_PATH + ":" + id, GUI_PATH);
+        // No hitboxRecessZ here, unlike every other button: these rows live inside
+        // eventsListButton, whose own full-viewport scroll hitbox sits behind them - a recessed row
+        // hitbox would end up behind that one and never get hovered/clicked. Left at its normal
+        // (forward-jutting) position so it wins the raycast.
         return ButtonData.builder()
                 .at(x, y, z)
                 .size(widthPixels, heightPixels)
                 .layers(design)
                 .id(id)
                 .onLeftClick(onClick)
-                .hitboxOffsetZ(hitboxRecessZ(widthPixels))
                 .build();
     }
+
+    /** Scroll hitbox width as a fraction of the list's visual width - kept narrow because an
+     * Interaction's width is also its depth, so a full-width box juts far out toward the player. */
+    private static final double EVENTS_LIST_SCROLL_HITBOX_WIDTH_FACTOR = 0.5;
 
     /**
      * The events list, as a single {@code ButtonType.BUTTON_LIST_SCROLL} - per "Použij na ty
@@ -945,9 +953,13 @@ public final class AdminGuiService implements Listener {
         frame.setHeight((float) (heightPixels / PIXELS_PER_BLOCK));
         LayersData frameLayers = new LayersData(List.of(frame), GUI_PATH + ":events-list", GUI_PATH);
 
+        // Scroll hitbox: narrower than the frame and recessed so its front face is flush with the
+        // list plane - the (unrecessed) row hitboxes then sit fully in front of it.
+        double scrollHitboxWidthPixels = widthPixels * EVENTS_LIST_SCROLL_HITBOX_WIDTH_FACTOR;
         return ButtonListScrollButtonData.buttonListScrollBuilder()
                 .at(x, y, z)
-                .size(widthPixels, heightPixels)
+                .size(scrollHitboxWidthPixels, heightPixels)
+                .hitboxOffsetZ(hitboxRecessZ(scrollHitboxWidthPixels))
                 .layers(frameLayers)
                 .id("events-list")
                 .items(rows)
