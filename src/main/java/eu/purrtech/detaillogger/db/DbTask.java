@@ -8,7 +8,7 @@ public sealed interface DbTask {
 
     record InsertEventTask(String unitUuid, String eventType, long timestamp, String world,
                             Integer x, Integer y, Integer z, String playerUuid,
-                            String detailJson, String gamemode) implements DbTask {
+                            String detailJson, String gamemode, String nearbyPlayers) implements DbTask {
     }
 
     record UpsertTrackedUnitTask(String uuid, int templateId, String kind, String origin,

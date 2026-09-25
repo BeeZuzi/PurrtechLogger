@@ -59,9 +59,12 @@ import java.util.UUID;
  * existing stack (now with proper partial-merge support - see {@link StackMath#mergeUnits}, fixing
  * an earlier bug where a stack that didn't fully fit fell through to vanilla's swap and looked like
  * it vanished), {@link #tryGatherOntoCursor} for double-click's "collect all matching items", and
- * {@link #consolidate} for everything else (shift-click, hopper transfers, drags) - run as a
- * general sweep after any inventory action instead of trying to replicate each shortcut's own
- * destination-selection rules one by one.
+ * {@link #tryShiftClick} for shift-click's "quick move to the other inventory, topping up existing
+ * stacks first". {@link #consolidate} covers what's left - drags, which can still legitimately
+ * scatter a tracked stack across several vanilla-chosen slots in one motion - as a general sweep.
+ * It's deliberately NOT run after a plain single-slot click any more (see {@link #tryShiftClick}'s
+ * Javadoc for the bug that caused: it couldn't tell "vanilla scattered this, re-merge it" apart from
+ * "the player just split a stack and put the other half somewhere on purpose").
  */
 public final class ContainerListener implements Listener {
 
@@ -78,7 +81,7 @@ public final class ContainerListener implements Listener {
         if (!(event.getWhoClicked() instanceof Player player)) {
             return;
         }
-        if (tryMerge(event, player) || tryGatherOntoCursor(event, player)) {
+        if (tryMerge(event, player) || tryGatherOntoCursor(event, player) || tryShiftClick(event, player)) {
             return; // handled entirely by hand (event cancelled) - nothing left to reconcile
         }
 
@@ -88,17 +91,14 @@ public final class ContainerListener implements Listener {
         String viewTitle = plainTitle(view);
         // Scheduled a tick later: at event-dispatch time the click hasn't been resolved by the
         // server yet, so re-reading the slot next tick is the reliable way to see where the item
-        // actually ended up, regardless of the exact click type (pickup/place/swap/shift-click).
+        // actually ended up, regardless of the exact click type (pickup/place/swap/split).
+        // No consolidate() sweep here on purpose: everything that reaches this point is a single,
+        // deliberate one-destination action (plain place, plain split, hotbar swap, ...) - see
+        // tryShiftClick's Javadoc for why a blanket post-click sweep used to undo exactly that.
         Bukkit.getScheduler().runTask(plugin, () -> {
             if (clicked != null && slot >= 0) {
                 reconcileClickResult(clicked, slot, player, viewTitle);
             }
-            // Shift-click (and anything else not handled above) can scatter a tracked stack
-            // across whichever slots vanilla's own algorithm picked in the OTHER inventory of
-            // this view, not just the clicked one - sweep both sides to pull any same-template
-            // fragments back together instead of trying to predict where vanilla put them.
-            consolidate(view.getTopInventory(), player, viewTitle);
-            consolidate(view.getBottomInventory(), player, viewTitle);
         });
     }
 
@@ -246,14 +246,133 @@ public final class ContainerListener implements Listener {
     }
 
     /**
+     * Vanilla's shift-click ("quick move") relies on the exact same PDC-similarity check every
+     * other shortcut in this class does, so for a tracked stack it can never recognize an existing
+     * same-template stack elsewhere as a valid top-up target - it just drops the whole moving stack
+     * into the first empty slot it finds, ignoring any partial stack of the same template that's
+     * already sitting there. That alone isn't destructive by itself, but leaving shift-click to
+     * vanilla and then cleaning up afterward with a blanket {@link #consolidate} sweep of both
+     * inventories caused two real bugs: shift-clicking into a chest that already held a partial
+     * stack could come out with the existing stack only bumped by one instead of topped up
+     * properly, and separately, manually splitting a merged stack and placing the split-off half in
+     * its own empty slot got instantly swept back together with the half it came from, undoing the
+     * player's own deliberate action, since the sweep couldn't tell that apart from a shift-click's
+     * scattered leftovers. Replicating shift-click by hand sidesteps both: transfer into the other
+     * inventory's existing same-template stacks first (front-to-back, topping each up to its cap -
+     * matching vanilla's own "existing stack first" destination order), then spill whatever's left
+     * into empty slots one stack at a time. No more reliance on a broad post-hoc sweep for this
+     * case. Returns true if it handled (and cancelled) the event.
+     */
+    private boolean tryShiftClick(InventoryClickEvent event, Player player) {
+        ClickType click = event.getClick();
+        if (click != ClickType.SHIFT_LEFT && click != ClickType.SHIFT_RIGHT) {
+            return false; // plain clicks/double-clicks are handled elsewhere
+        }
+        Inventory source = event.getClickedInventory();
+        int sourceSlot = event.getSlot();
+        if (source == null || sourceSlot < 0) {
+            return false;
+        }
+        ItemStack moving = event.getCurrentItem();
+        if (moving == null || moving.getType().isAir()) {
+            return false;
+        }
+        List<UUID> movingUnits = tracking.readAllUnits(moving);
+        if (movingUnits.isEmpty()) {
+            return false; // untracked - vanilla's own quick-move handles it fine
+        }
+        String templateKey = tracking.readTemplateKey(moving);
+        if (templateKey == null) {
+            return false;
+        }
+
+        InventoryView view = event.getView();
+        Inventory destination = source.equals(view.getTopInventory()) ? view.getBottomInventory() : view.getTopInventory();
+        String viewTitle = plainTitle(view);
+
+        ItemStack[] destContents = destination.getContents();
+        List<UUID> remaining = new ArrayList<>(movingUnits);
+        List<Runnable> locationUpdates = new ArrayList<>();
+        boolean placedAnything = false;
+
+        // Pass 1: top up existing same-template stacks first, front-to-back.
+        for (int slot = 0; slot < destContents.length && !remaining.isEmpty(); slot++) {
+            ItemStack existing = destContents[slot];
+            if (existing == null || existing.getType() != moving.getType()) {
+                continue;
+            }
+            List<UUID> existingUnits = tracking.readAllUnits(existing);
+            if (existingUnits.isEmpty() || !templateKey.equals(tracking.readTemplateKey(existing))) {
+                continue;
+            }
+            StackMath.MergeResult sliced = StackMath.mergeUnits(
+                    toStrings(existingUnits), toStrings(remaining), existing.getMaxStackSize(), remaining.size());
+            if (sliced.destination().size() == existingUnits.size()) {
+                continue; // already full
+            }
+            List<UUID> newUnits = toUuids(sliced.destination());
+            ItemStack merged = existing.clone();
+            merged.setAmount(newUnits.size());
+            tracking.writeMergedUnits(merged, newUnits, templateKey);
+            destContents[slot] = merged;
+            remaining = new ArrayList<>(toUuids(sliced.source()));
+            placedAnything = true;
+            int mergedSlot = slot;
+            locationUpdates.add(() -> resolveContext(destination, mergedSlot, player, viewTitle)
+                    .ifPresent(ctx -> tracking.recordLocationForAll(newUnits, ctx, "MERGED", player)));
+        }
+
+        // Pass 2: spill whatever's left into empty slots, one stack per slot up to max stack size.
+        for (int slot = 0; slot < destContents.length && !remaining.isEmpty(); slot++) {
+            ItemStack existing = destContents[slot];
+            if (existing != null && !existing.getType().isAir()) {
+                continue;
+            }
+            int take = Math.min(moving.getMaxStackSize(), remaining.size());
+            List<UUID> placedUnits = new ArrayList<>(remaining.subList(0, take));
+            ItemStack placed = moving.clone();
+            placed.setAmount(placedUnits.size());
+            tracking.writeMergedUnits(placed, placedUnits, templateKey);
+            destContents[slot] = placed;
+            remaining = new ArrayList<>(remaining.subList(take, remaining.size()));
+            placedAnything = true;
+            int placedSlot = slot;
+            locationUpdates.add(() -> resolveContext(destination, placedSlot, player, viewTitle)
+                    .ifPresent(ctx -> tracking.recordLocationForAll(placedUnits, ctx, "MOVED", player)));
+        }
+
+        if (!placedAnything) {
+            return false; // no room anywhere - let vanilla leave it alone, same as it would anyway
+        }
+
+        event.setCancelled(true);
+        destination.setContents(destContents);
+
+        if (remaining.isEmpty()) {
+            source.setItem(sourceSlot, null);
+        } else {
+            ItemStack remainder = moving.clone();
+            remainder.setAmount(remaining.size());
+            tracking.writeMergedUnits(remainder, remaining, templateKey);
+            source.setItem(sourceSlot, remainder);
+        }
+
+        locationUpdates.forEach(Runnable::run);
+        return true;
+    }
+
+    /**
      * Sweeps every slot of the given inventory and merges any tracked stacks that share a
-     * template and have room, front-to-back. The general fix for every vanilla shortcut that can
-     * leave the same tracked template split across multiple slots - shift-click, hopper
-     * transfers, drags - without needing to replicate each one's own destination-selection rules;
-     * it just cleans up wherever vanilla put things. Idempotent (a second call on an
-     * already-consolidated inventory is a no-op) and cheap enough to run after every inventory
-     * action - a single greedy left-to-right pass may leave a little fragmentation in rare cases
-     * (e.g. three-way splits), which the very next action's sweep mops up.
+     * template and have room, front-to-back. Only called after a drag now (see {@link #onDrag}) -
+     * shift-click and direct-click merging are handled by hand ({@link #tryShiftClick},
+     * {@link #tryMerge}, {@link #tryGatherOntoCursor}) precisely because a blanket sweep like this
+     * one can't distinguish "vanilla scattered this, re-merge it" from "the player deliberately put
+     * these in separate slots" - it used to run after every click for exactly that reason and that
+     * caused a real bug (see {@link #tryShiftClick}'s Javadoc). A drag is still a single gesture
+     * spread across several vanilla-picked slots in one go rather than several independent player
+     * choices, so sweeping it afterward remains safe. Idempotent (a second call on an
+     * already-consolidated inventory is a no-op) - a single greedy left-to-right pass may leave a
+     * little fragmentation in rare cases (e.g. three-way splits), which the very next sweep mops up.
      */
     private void consolidate(Inventory inventory, Player actor, String viewTitle) {
         ItemStack[] contents = inventory.getContents();

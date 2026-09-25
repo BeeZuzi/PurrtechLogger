@@ -55,8 +55,8 @@ final class DbWriterThread extends Thread {
         try {
             connection.setAutoCommit(false);
             try (PreparedStatement events = connection.prepareStatement("""
-                            INSERT INTO events(unit_uuid, event_type, timestamp, world, x, y, z, player_uuid, detail, gamemode)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            INSERT INTO events(unit_uuid, event_type, timestamp, world, x, y, z, player_uuid, detail, gamemode, nearby_players)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                             """);
                  PreparedStatement units = connection.prepareStatement("""
                             INSERT INTO tracked_units(uuid, template_id, kind, origin, duplicated_from_uuid,
@@ -231,6 +231,7 @@ final class DbWriterThread extends Thread {
         ps.setString(8, t.playerUuid());
         ps.setString(9, t.detailJson());
         ps.setString(10, t.gamemode());
+        ps.setString(11, t.nearbyPlayers());
     }
 
     private static void bindUnit(PreparedStatement ps, DbTask.UpsertTrackedUnitTask t) throws SQLException {

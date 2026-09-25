@@ -13,9 +13,10 @@ dependencies {
     compileOnly("io.papermc.paper:paper-api:1.21.11-R0.1-SNAPSHOT")
     implementation("org.xerial:sqlite-jdbc:3.53.2.1")
     // DisplayGUI is a soft dependency (the admin GUI is optional, see paper-plugin.yml) and isn't
-    // published to a repository - both plugins are local projects on this machine, so a direct
-    // file reference to its build output is the pragmatic choice for a solo-dev setup.
-    compileOnly(files("lib/PurrTechDisplayGUI-1.0.jar"))
+    // published to a repository. It's included as a composite build (see settings.gradle.kts),
+    // which Gradle auto-substitutes for this coordinate - so this always compiles against
+    // DisplayGUI's current source, with no manual jar rebuild/copy step.
+    compileOnly("eu.purrtech:PurrTechDisplayGUI:1.0")
 
     // TemplateConfigLoader (YamlConfiguration/Material) and StackMath (pure logic) are testable
     // without a running server - paper-api's config/Material classes are self-contained. Anything

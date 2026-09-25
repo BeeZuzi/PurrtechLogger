@@ -130,7 +130,7 @@ public final class DetailLoggerPlugin extends JavaPlugin {
             return null;
         }
         AdminGuiService adminGuiService = new AdminGuiService(
-                historyService, templateDao, dupeAlertDao, playerDirectory, this, getLogger());
+                historyService, templateDao, dupeAlertDao, playerDirectory, eventDao, this, getLogger());
         getServer().getPluginManager().registerEvents(adminGuiService, this);
         MenuViewLoggingAction.register(eventDao);
         getLogger().info("DisplayGUI integrace aktivni (/purrlog gui, [purrtechlog] akce).");

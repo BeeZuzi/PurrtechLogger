@@ -229,14 +229,14 @@ public final class ItemTrackingService {
                 location != null ? location.getBlockZ() : null,
                 null, null, null, null, now);
 
-        eventDao.enqueue(uuid.toString(), "DESTROYED", now,
-                location != null ? location.getWorld().getName() : null,
-                location != null ? location.getBlockX() : null,
-                location != null ? location.getBlockY() : null,
-                location != null ? location.getBlockZ() : null,
-                actor != null ? actor.getUniqueId().toString() : null,
-                jsonField("cause", cause),
-                actor != null ? actor.getGameMode().name() : null);
+        String world = location != null ? location.getWorld().getName() : null;
+        Integer x = location != null ? location.getBlockX() : null;
+        Integer y = location != null ? location.getBlockY() : null;
+        Integer z = location != null ? location.getBlockZ() : null;
+        String actorUuid = actor != null ? actor.getUniqueId().toString() : null;
+        eventDao.enqueue(uuid.toString(), "DESTROYED", now, world, x, y, z, actorUuid,
+                jsonField("cause", cause), actor != null ? actor.getGameMode().name() : null,
+                NearbyPlayers.capture(world, x, y, z, actorUuid));
     }
 
     /** Same as {@link #markDestroyed} but for every unit in a (possibly merged) stack at once. */

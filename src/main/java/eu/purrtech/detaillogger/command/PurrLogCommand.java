@@ -194,7 +194,7 @@ public final class PurrLogCommand implements BasicCommand {
             sender.sendMessage("Tento prikaz musi spustit hrac.");
             return;
         }
-        adminGuiService.openMainMenu(player);
+        adminGuiService.openLastPageOrMain(player);
     }
 
     private void runAlerts(CommandSender sender) {

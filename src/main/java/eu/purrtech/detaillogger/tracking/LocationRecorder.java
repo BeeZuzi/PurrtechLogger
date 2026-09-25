@@ -44,8 +44,9 @@ final class LocationRecorder {
             eventZ = loc.getBlockZ();
         }
 
+        String actorUuid = actor != null ? actor.getUniqueId().toString() : null;
+        String nearbyPlayers = NearbyPlayers.capture(eventWorld, eventX, eventY, eventZ, actorUuid);
         eventDao.enqueue(uuid.toString(), eventType, now, eventWorld, eventX, eventY, eventZ,
-                actor != null ? actor.getUniqueId().toString() : null, null,
-                actor != null ? actor.getGameMode().name() : null);
+                actorUuid, null, actor != null ? actor.getGameMode().name() : null, nearbyPlayers);
     }
 }

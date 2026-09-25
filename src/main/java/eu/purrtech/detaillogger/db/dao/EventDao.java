@@ -9,7 +9,10 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
+import java.util.Optional;
+import java.util.stream.Collectors;
 
 public final class EventDao {
 
@@ -21,14 +24,26 @@ public final class EventDao {
 
     public void enqueue(String unitUuid, String eventType, long timestamp, String world,
                          Integer x, Integer y, Integer z, String playerUuid, String detailJson) {
-        enqueue(unitUuid, eventType, timestamp, world, x, y, z, playerUuid, detailJson, null);
+        enqueue(unitUuid, eventType, timestamp, world, x, y, z, playerUuid, detailJson, null, null);
     }
 
     public void enqueue(String unitUuid, String eventType, long timestamp, String world,
                          Integer x, Integer y, Integer z, String playerUuid, String detailJson,
                          String gamemode) {
+        enqueue(unitUuid, eventType, timestamp, world, x, y, z, playerUuid, detailJson, gamemode, null);
+    }
+
+    /**
+     * @param nearbyPlayers comma-separated names of other online players who were near this
+     *                       event's location when it happened - see
+     *                       {@link eu.purrtech.detaillogger.tracking.NearbyPlayers}. Null if
+     *                       unknown (no location) or nobody else was around.
+     */
+    public void enqueue(String unitUuid, String eventType, long timestamp, String world,
+                         Integer x, Integer y, Integer z, String playerUuid, String detailJson,
+                         String gamemode, String nearbyPlayers) {
         database.writeQueue().offer(new DbTask.InsertEventTask(
-                unitUuid, eventType, timestamp, world, x, y, z, playerUuid, detailJson, gamemode));
+                unitUuid, eventType, timestamp, world, x, y, z, playerUuid, detailJson, gamemode, nearbyPlayers));
     }
 
     /**
@@ -43,7 +58,7 @@ public final class EventDao {
         MainThreadCheck.assertAsync();
         Connection connection = borrow();
         try (PreparedStatement ps = connection.prepareStatement("""
-                SELECT id, unit_uuid, event_type, timestamp, world, x, y, z, player_uuid, detail, gamemode
+                SELECT id, unit_uuid, event_type, timestamp, world, x, y, z, player_uuid, detail, gamemode, nearby_players
                 FROM events WHERE unit_uuid = ? AND event_type != 'MOVED' ORDER BY timestamp
                 """)) {
             ps.setString(1, unitUuid);
@@ -66,13 +81,80 @@ public final class EventDao {
         MainThreadCheck.assertAsync();
         Connection connection = borrow();
         try (PreparedStatement ps = connection.prepareStatement("""
-                SELECT id, unit_uuid, event_type, timestamp, world, x, y, z, player_uuid, detail, gamemode
+                SELECT id, unit_uuid, event_type, timestamp, world, x, y, z, player_uuid, detail, gamemode, nearby_players
                 FROM events WHERE player_uuid = ? AND event_type != 'MOVED' ORDER BY timestamp DESC LIMIT ?
                 """)) {
             ps.setString(1, playerUuid);
             ps.setInt(2, limit);
             try (ResultSet rs = ps.executeQuery()) {
                 return readEvents(rs);
+            }
+        } finally {
+            database.readPool().release(connection);
+        }
+    }
+
+    /**
+     * Blocking read - must be called off the main thread. Newest first, capped at {@code limit}.
+     * Used by the admin GUI's "all events" browser: {@code eventTypes} narrows to those types
+     * when non-empty (no restriction otherwise), and either bound is skipped when {@code null}.
+     * Unlike {@link #findByUnit}/{@link #findByPlayer}, {@code MOVED} is not excluded here since
+     * this is meant to show literally everything the category filter allows through.
+     */
+    public List<EventRecord> findFiltered(Collection<String> eventTypes, Long fromMillisInclusive,
+                                           Long toMillisInclusive, int limit) throws SQLException {
+        MainThreadCheck.assertAsync();
+        StringBuilder sql = new StringBuilder("""
+                SELECT id, unit_uuid, event_type, timestamp, world, x, y, z, player_uuid, detail, gamemode, nearby_players
+                FROM events WHERE 1=1
+                """);
+        List<Object> params = new ArrayList<>();
+        if (eventTypes != null && !eventTypes.isEmpty()) {
+            String placeholders = eventTypes.stream().map(t -> "?").collect(Collectors.joining(","));
+            sql.append(" AND event_type IN (").append(placeholders).append(')');
+            params.addAll(eventTypes);
+        }
+        if (fromMillisInclusive != null) {
+            sql.append(" AND timestamp >= ?");
+            params.add(fromMillisInclusive);
+        }
+        if (toMillisInclusive != null) {
+            sql.append(" AND timestamp <= ?");
+            params.add(toMillisInclusive);
+        }
+        sql.append(" ORDER BY timestamp DESC LIMIT ?");
+        params.add(limit);
+
+        Connection connection = borrow();
+        try (PreparedStatement ps = connection.prepareStatement(sql.toString())) {
+            for (int i = 0; i < params.size(); i++) {
+                ps.setObject(i + 1, params.get(i));
+            }
+            try (ResultSet rs = ps.executeQuery()) {
+                return readEvents(rs);
+            }
+        } finally {
+            database.readPool().release(connection);
+        }
+    }
+
+    /**
+     * Blocking read - must be called off the main thread. Looks a single event up by its own
+     * primary key - per "Ukládej to pod ID kdy to půjde kdykoliv najít" (store it under an ID so
+     * it can always be found), used by the admin GUI's event detail page so it always shows
+     * freshly-persisted data instead of only whatever was in memory from the list query.
+     */
+    public Optional<EventRecord> findById(long id) throws SQLException {
+        MainThreadCheck.assertAsync();
+        Connection connection = borrow();
+        try (PreparedStatement ps = connection.prepareStatement("""
+                SELECT id, unit_uuid, event_type, timestamp, world, x, y, z, player_uuid, detail, gamemode, nearby_players
+                FROM events WHERE id = ?
+                """)) {
+            ps.setLong(1, id);
+            try (ResultSet rs = ps.executeQuery()) {
+                List<EventRecord> results = readEvents(rs);
+                return results.isEmpty() ? Optional.empty() : Optional.of(results.get(0));
             }
         } finally {
             database.readPool().release(connection);
@@ -93,7 +175,8 @@ public final class EventDao {
                     nullableInt(rs, "z"),
                     rs.getString("player_uuid"),
                     rs.getString("detail"),
-                    rs.getString("gamemode")
+                    rs.getString("gamemode"),
+                    rs.getString("nearby_players")
             ));
         }
         return results;

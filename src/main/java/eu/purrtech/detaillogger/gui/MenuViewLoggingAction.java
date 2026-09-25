@@ -1,6 +1,7 @@
 package eu.purrtech.detaillogger.gui;
 
 import eu.purrtech.detaillogger.db.dao.EventDao;
+import eu.purrtech.detaillogger.tracking.NearbyPlayers;
 import eu.purrtech.displaygui.API.actions.MenuActionRegistry;
 import org.bukkit.Location;
 import org.bukkit.entity.Player;
@@ -34,9 +35,13 @@ public final class MenuViewLoggingAction {
             long now = System.currentTimeMillis();
             Location loc = player.getLocation();
             String detail = "{\"template_key\":\"" + escape(templateKey) + "\"}";
-            eventDao.enqueue(null, "VIEWED_IN_MENU", now, loc.getWorld().getName(),
-                    loc.getBlockX(), loc.getBlockY(), loc.getBlockZ(), player.getUniqueId().toString(), detail,
-                    player.getGameMode().name());
+            String world = loc.getWorld().getName();
+            int x = loc.getBlockX();
+            int y = loc.getBlockY();
+            int z = loc.getBlockZ();
+            String actorUuid = player.getUniqueId().toString();
+            eventDao.enqueue(null, "VIEWED_IN_MENU", now, world, x, y, z, actorUuid, detail,
+                    player.getGameMode().name(), NearbyPlayers.capture(world, x, y, z, actorUuid));
         });
     }
 
