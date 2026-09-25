@@ -907,9 +907,10 @@ public final class AdminGuiService implements Listener {
                 .build();
     }
 
-    /** Scroll hitbox width as a fraction of the list's visual width - kept narrow because an
-     * Interaction's width is also its depth, so a full-width box juts far out toward the player. */
-    private static final double EVENTS_LIST_SCROLL_HITBOX_WIDTH_FACTOR = 0.5;
+    /** How much narrower (px) the scroll hitbox is than the list's visual width - kept narrower
+     * because an Interaction's width is also its depth, so a full-width box juts far out toward the
+     * player. 3 hitbox tiles of 0.5 block each = 1.5 blocks = 24 px ("jenom o 3 ty kostky"). */
+    private static final double EVENTS_LIST_SCROLL_HITBOX_SHRINK_PX = 3 * 0.5 * PIXELS_PER_BLOCK;
 
     /**
      * The events list, as a single {@code ButtonType.BUTTON_LIST_SCROLL} - per "Použij na ty
@@ -955,7 +956,7 @@ public final class AdminGuiService implements Listener {
 
         // Scroll hitbox: narrower than the frame and recessed so its front face is flush with the
         // list plane - the (unrecessed) row hitboxes then sit fully in front of it.
-        double scrollHitboxWidthPixels = widthPixels * EVENTS_LIST_SCROLL_HITBOX_WIDTH_FACTOR;
+        double scrollHitboxWidthPixels = Math.max(HITBOX_MIN_WIDTH_PX, widthPixels - EVENTS_LIST_SCROLL_HITBOX_SHRINK_PX);
         return ButtonListScrollButtonData.buttonListScrollBuilder()
                 .at(x, y, z)
                 .size(scrollHitboxWidthPixels, heightPixels)
