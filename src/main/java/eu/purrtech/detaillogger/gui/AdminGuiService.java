@@ -107,7 +107,7 @@ public final class AdminGuiService implements Listener {
      * [[reference-purrtechdisplaygui-coordinate-rules]]. Sign/magnitude picked from that section's
      * general guidance, NOT yet confirmed in-game - if it turns the wrong way, flip the sign via
      * the in-editor "Rotace" tool or here. */
-    private static final float EVENTS_LIST_ROTATION_Y_DEGREES = -12f;
+    private static final float EVENTS_LIST_ROTATION_Y_DEGREES = -18f; // was -12, "ještě nakloň o trošku"
 
     /**
      * Explicit screen size (blocks), applied to every page's background layer so
@@ -751,6 +751,13 @@ public final class AdminGuiService implements Listener {
         return -widthPixels / 2.0;
     }
 
+    /** {@link #hitboxRecessZ} counterpart for buttons whose layer is ROTATED: DisplayGUI splits
+     * those into ~0.5-block Interaction tiles laid along the tilted face (Button#computeHitboxCells,
+     * PREFERRED_HITBOX_TILE_SIZE), so each tile only juts forward by half a tile, not half the
+     * whole button - recessing by the button's half width pushed the tiles far behind the layer
+     * ("dej ty hitboxy blíže k té vrstvě"). Half a tile puts each tile's front face on the layer. */
+    private static final double ROTATED_TILE_HITBOX_RECESS_Z = -(0.5 * PIXELS_PER_BLOCK) / 2.0;
+
     private static String formatTime(Long epochMillis) {
         return EventLineFormatter.formatTime(epochMillis);
     }
@@ -949,10 +956,11 @@ public final class AdminGuiService implements Listener {
         double heightPixels = Math.max(HITBOX_HEIGHT_PX,
                 textHeightBlocks * PIXELS_PER_BLOCK + HITBOX_PADDING_PX);
         LayersData design = new LayersData(List.of(text, iconLayer), GUI_PATH + ":" + id, GUI_PATH);
-        // No hitboxRecessZ here, unlike every other button: these rows live inside
-        // eventsListButton, whose own full-viewport scroll hitbox sits behind them - a recessed row
-        // hitbox would end up behind that one and never get hovered/clicked. Left at its normal
-        // (forward-jutting) position so it wins the raycast.
+        // Not hitboxRecessZ (half the whole width): these rows live inside eventsListButton, whose
+        // own scroll hitbox sits behind them, and a row recessed that far would end up behind it and
+        // never get hovered/clicked. The rows are rotated, so their hitbox is 0.5-block tiles along
+        // the tilted face - recessing by half a tile keeps them on the layer while the list's
+        // built-in 0.5-block row offset still keeps them in front of the scroll hitbox.
         return ButtonData.builder()
                 .at(x, y, z)
                 .size(widthPixels, heightPixels)
@@ -961,6 +969,7 @@ public final class AdminGuiService implements Listener {
                 .onLeftClick(onClick)
                 .onHoverStart(onHoverStart)
                 .onHoverEnd(onHoverEnd)
+                .hitboxOffsetZ(ROTATED_TILE_HITBOX_RECESS_Z)
                 .build();
     }
 
@@ -1065,7 +1074,9 @@ public final class AdminGuiService implements Listener {
     /** Depth (blocks, + = toward the player). Was 0.05, same plane as the list - the panel then
      * looked like it sat behind the list ("je pořád z pohledu hráče za tím listem"), so it's
      * pulled forward to sit beside it instead. */
-    private static final double EVENT_PREVIEW_Z = 1.0;
+    // 1.0 -> 3.5 ("třeba 3 až 5 to Z"). The menu itself is MENU_DISTANCE_PIXELS = 5 blocks away,
+    // so 5 would put the panel level with the player.
+    private static final double EVENT_PREVIEW_Z = 3.5;
     /** "tam bude ještě 2 sekundy a pak to zmizne" */
     private static final long EVENT_PREVIEW_LINGER_TICKS = 40;
     private static final Color TRANSPARENT = Color.fromARGB(0, 0, 0, 0);
@@ -1110,7 +1121,7 @@ public final class AdminGuiService implements Listener {
                         scheduleEventPreviewHide(player, state);
                     }
                 })
-                .hitboxOffsetZ(hitboxRecessZ(widthPixels))
+                .hitboxOffsetZ(ROTATED_TILE_HITBOX_RECESS_Z)
                 .build();
     }
 
