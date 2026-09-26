@@ -6,6 +6,7 @@ import eu.purrtech.detaillogger.tracking.StackMath;
 import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
+import org.bukkit.Material;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
@@ -20,6 +21,7 @@ import org.bukkit.event.inventory.InventoryType;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.InventoryView;
 import org.bukkit.inventory.ItemStack;
+import org.bukkit.inventory.PlayerInventory;
 import org.bukkit.plugin.Plugin;
 
 import java.util.ArrayList;
@@ -28,6 +30,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Extends the location model to block containers (chest/barrel/furnace/hopper/dispenser/placed
@@ -68,8 +71,21 @@ import java.util.UUID;
  */
 public final class ContainerListener implements Listener {
 
+    /** Max gap between the two shift-clicks of a shift-double-click. Vanilla's client uses 250 ms;
+     * doubled to absorb network jitter between the two click packets. */
+    private static final long SHIFT_DOUBLE_CLICK_WINDOW_MS = 500;
+
+    private record TrackedKind(Material type, String templateKey) {
+    }
+
+    /** A player's previous click - see {@link #tryShiftDoubleClick}. {@code kind} is the tracked
+     * item involved (clicked stack, else cursor), null if none. */
+    private record LastClick(Inventory inventory, int slot, long at, TrackedKind kind) {
+    }
+
     private final ItemTrackingService tracking;
     private final Plugin plugin;
+    private final Map<UUID, LastClick> lastClicks = new ConcurrentHashMap<>();
 
     public ContainerListener(ItemTrackingService tracking, Plugin plugin) {
         this.tracking = tracking;
@@ -79,6 +95,15 @@ public final class ContainerListener implements Listener {
     @EventHandler
     public void onClick(InventoryClickEvent event) {
         if (!(event.getWhoClicked() instanceof Player player)) {
+            return;
+        }
+        // Read before any handler below mutates the slot/cursor.
+        TrackedKind clickedKind = trackedKind(event.getCurrentItem());
+        LastClick previous = lastClicks.put(player.getUniqueId(), new LastClick(event.getClickedInventory(),
+                event.getSlot(), System.currentTimeMillis(),
+                clickedKind != null ? clickedKind : trackedKind(event.getCursor())));
+        if (tryShiftDoubleClick(event, player, previous)) {
+            lastClicks.remove(player.getUniqueId()); // a 3rd quick click starts over, not another bulk move
             return;
         }
         if (tryMerge(event, player) || tryGatherOntoCursor(event, player) || tryShiftClick(event, player)) {
@@ -277,20 +302,93 @@ public final class ContainerListener implements Listener {
         if (moving == null || moving.getType().isAir()) {
             return false;
         }
+        InventoryView view = event.getView();
+        Inventory destination = source.equals(view.getTopInventory()) ? view.getBottomInventory() : view.getTopInventory();
+        if (!quickMoveStack(source, sourceSlot, destination, player, plainTitle(view))) {
+            return false; // untracked, or no room anywhere - vanilla handles/ignores it the same way
+        }
+        event.setCancelled(true);
+        return true;
+    }
+
+    /**
+     * Vanilla's shift + double-click ("move every item of this kind to the other inventory") is
+     * resolved client-side: the client itself picks the matching slots by comparing item
+     * components, so for tracked items (unique PDC per unit) it never finds a single match and
+     * only the clicked stack moves. The server just sees two shift-clicks on the same slot in
+     * quick succession - that's what this detects (see {@link #SHIFT_DOUBLE_CLICK_WINDOW_MS}),
+     * then moves every stack of the same template from the clicked inventory to the other one,
+     * each via {@link #quickMoveStack}. Covers both ways players do it: shift-double-click on a
+     * stack, and shift-double-click with the same item on the cursor (whose first click merges
+     * the cursor into the slot - the template is remembered from that click).
+     */
+    private boolean tryShiftDoubleClick(InventoryClickEvent event, Player player, LastClick previous) {
+        ClickType click = event.getClick();
+        if (click != ClickType.SHIFT_LEFT && click != ClickType.SHIFT_RIGHT) {
+            return false;
+        }
+        Inventory source = event.getClickedInventory();
+        if (source == null || previous == null || previous.slot() != event.getSlot()
+                || !source.equals(previous.inventory())
+                || System.currentTimeMillis() - previous.at() > SHIFT_DOUBLE_CLICK_WINDOW_MS) {
+            return false;
+        }
+        TrackedKind kind = trackedKind(event.getCurrentItem());
+        if (kind == null) {
+            kind = previous.kind();
+        }
+        if (kind == null) {
+            return false; // nothing tracked involved - vanilla's own shift-double-click works
+        }
+
+        InventoryView view = event.getView();
+        Inventory destination = source.equals(view.getTopInventory()) ? view.getBottomInventory() : view.getTopInventory();
+        String viewTitle = plainTitle(view);
+        ItemStack[] sourceContents = movableContents(source);
+        boolean movedAny = false;
+        for (int slot = 0; slot < sourceContents.length; slot++) {
+            if (kind.equals(trackedKind(sourceContents[slot]))) {
+                movedAny |= quickMoveStack(source, slot, destination, player, viewTitle);
+            }
+        }
+        if (!movedAny) {
+            return false;
+        }
+        event.setCancelled(true);
+        return true;
+    }
+
+    /** Material + template of a tracked stack whose unit count matches its amount, else null. */
+    private TrackedKind trackedKind(ItemStack item) {
+        if (item == null || item.getType().isAir() || consistentUnits(item).isEmpty()) {
+            return null;
+        }
+        String templateKey = tracking.readTemplateKey(item);
+        return templateKey != null ? new TrackedKind(item.getType(), templateKey) : null;
+    }
+
+    /**
+     * Quick-moves one tracked stack from {@code source}'s slot into {@code destination} by hand:
+     * top up existing same-template stacks first (front-to-back), then spill into empty slots.
+     * Updates both inventories and records the location events. Returns false (touching nothing)
+     * if the stack isn't tracked or there's no room anywhere.
+     */
+    private boolean quickMoveStack(Inventory source, int sourceSlot, Inventory destination, Player player,
+                                   String viewTitle) {
+        ItemStack moving = source.getItem(sourceSlot);
+        if (moving == null || moving.getType().isAir()) {
+            return false;
+        }
         List<UUID> movingUnits = consistentUnits(moving);
         if (movingUnits.isEmpty()) {
-            return false; // untracked - vanilla's own quick-move handles it fine
+            return false;
         }
         String templateKey = tracking.readTemplateKey(moving);
         if (templateKey == null) {
             return false;
         }
 
-        InventoryView view = event.getView();
-        Inventory destination = source.equals(view.getTopInventory()) ? view.getBottomInventory() : view.getTopInventory();
-        String viewTitle = plainTitle(view);
-
-        ItemStack[] destContents = destination.getContents();
+        ItemStack[] destContents = movableContents(destination);
         List<UUID> remaining = new ArrayList<>(movingUnits);
         List<Runnable> locationUpdates = new ArrayList<>();
         boolean placedAnything = false;
@@ -345,8 +443,7 @@ public final class ContainerListener implements Listener {
             return false; // no room anywhere - let vanilla leave it alone, same as it would anyway
         }
 
-        event.setCancelled(true);
-        destination.setContents(destContents);
+        setMovableContents(destination, destContents);
 
         if (remaining.isEmpty()) {
             source.setItem(sourceSlot, null);
@@ -359,6 +456,21 @@ public final class ContainerListener implements Listener {
 
         locationUpdates.forEach(Runnable::run);
         return true;
+    }
+
+    /** A player inventory's main 36 slots only - never armor/offhand, which a quick-move must
+     * not fill (vanilla doesn't either). Any other inventory: all of its slots. */
+    private static ItemStack[] movableContents(Inventory inventory) {
+        return inventory instanceof PlayerInventory playerInventory
+                ? playerInventory.getStorageContents() : inventory.getContents();
+    }
+
+    private static void setMovableContents(Inventory inventory, ItemStack[] contents) {
+        if (inventory instanceof PlayerInventory playerInventory) {
+            playerInventory.setStorageContents(contents);
+        } else {
+            inventory.setContents(contents);
+        }
     }
 
     /**
