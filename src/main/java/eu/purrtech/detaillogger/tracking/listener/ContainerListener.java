@@ -247,19 +247,26 @@ public final class ContainerListener implements Listener {
         }
 
         ItemStack[] contents = clicked.getContents();
+        // Armor/offhand slots are never part of a gather (vanilla doesn't touch them either).
+        int limit = clicked instanceof PlayerInventory ? Math.min(36, contents.length) : contents.length;
+        int max = cursor.getMaxStackSize();
         List<UUID> gathered = new ArrayList<>(cursorUnits);
         boolean changed = false;
+        StackDebug.log("    gather: kurzor=" + StackDebug.describe(cursor) + " slotu=" + limit);
 
-        for (int slot = 0; slot < contents.length && gathered.size() < cursor.getMaxStackSize(); slot++) {
+        // Step 1: top the cursor stack up to a full stack from every other same-template stack,
+        // front-to-back.
+        for (int slot = 0; slot < limit && gathered.size() < max; slot++) {
             ItemStack item = contents[slot];
             if (item == null || item.getType() != cursor.getType()) {
                 continue;
             }
             List<UUID> units = consistentUnits(item);
             if (units.isEmpty() || !templateKey.equals(tracking.readTemplateKey(item))) {
+                StackDebug.log("        slot " + slot + " preskocen (jiny template / bez UUID): " + StackDebug.describe(item));
                 continue;
             }
-            int take = Math.min(cursor.getMaxStackSize() - gathered.size(), units.size());
+            int take = Math.min(max - gathered.size(), units.size());
             gathered.addAll(units.subList(0, take));
             List<UUID> remaining = units.subList(take, units.size());
             if (remaining.isEmpty()) {
@@ -270,8 +277,16 @@ public final class ContainerListener implements Listener {
                 tracking.writeMergedUnits(remainder, remaining, templateKey);
                 contents[slot] = remainder;
             }
+            StackDebug.log("        slot " + slot + " -> kurzor +" + take);
             changed = true;
         }
+
+        // Step 2: the cursor is full but fragments are left - glue those into as few stacks as
+        // possible ("pokud bude plny tak zase at to jde do noveho stacku") instead of leaving them
+        // scattered like vanilla's gather does.
+        boolean compacted = compactTemplate(clicked, contents, limit, cursor.getType(), templateKey, player,
+                plainTitle(event.getView()));
+        changed |= compacted;
 
         if (!changed) {
             return false;
@@ -284,9 +299,62 @@ public final class ContainerListener implements Listener {
         gatheredStack.setAmount(gathered.size());
         tracking.writeMergedUnits(gatheredStack, gathered, templateKey);
         player.setItemOnCursor(gatheredStack);
+        StackDebug.log("    gather hotovo: kurzor=" + StackDebug.describe(gatheredStack)
+                + (compacted ? " (zbytek slepen do plnych stacku)" : ""));
         // The gathered stack is floating on the cursor, not in a slot - same documented
         // simplification as elsewhere in this class: its location row goes stale until it lands
         // somewhere, which the next click's reconcile/consolidate pass picks up.
+        return true;
+    }
+
+    /**
+     * Re-lays out every stack of one template within {@code contents[0..limit)} into the fewest
+     * stacks: pools their units in slot order and refills the SAME slots front-to-back with full
+     * stacks, the last one taking the remainder and any slots no longer needed emptied. Only ever
+     * touches slots that already held that template, so nothing else moves. Records MERGED for the
+     * stacks that changed. Returns false (untouched) if the layout was already compact.
+     */
+    private boolean compactTemplate(Inventory inventory, ItemStack[] contents, int limit, Material type,
+                                    String templateKey, Player player, String viewTitle) {
+        List<Integer> slots = new ArrayList<>();
+        List<UUID> pool = new ArrayList<>();
+        for (int slot = 0; slot < limit; slot++) {
+            ItemStack item = contents[slot];
+            if (item == null || item.getType() != type) {
+                continue;
+            }
+            List<UUID> units = consistentUnits(item);
+            if (units.isEmpty() || !templateKey.equals(tracking.readTemplateKey(item))) {
+                continue;
+            }
+            slots.add(slot);
+            pool.addAll(units);
+        }
+        int max = type.getMaxStackSize();
+        int neededSlots = (pool.size() + max - 1) / max;
+        if (slots.size() <= neededSlots) {
+            return false; // already as compact as it can be (at most one partial stack)
+        }
+
+        int next = 0;
+        for (int i = 0; i < slots.size(); i++) {
+            int slot = slots.get(i);
+            if (i >= neededSlots) {
+                StackDebug.log("        compact: slot " + slot + " vyprazdnen");
+                contents[slot] = null;
+                continue;
+            }
+            int take = Math.min(max, pool.size() - next);
+            List<UUID> units = new ArrayList<>(pool.subList(next, next + take));
+            next += take;
+            ItemStack stack = contents[slot].clone();
+            stack.setAmount(units.size());
+            tracking.writeMergedUnits(stack, units, templateKey);
+            contents[slot] = stack;
+            StackDebug.log("        compact: slot " + slot + " = " + units.size());
+            resolveContext(inventory, slot, player, viewTitle)
+                    .ifPresent(ctx -> tracking.recordLocationForAll(units, ctx, "MERGED", player));
+        }
         return true;
     }
 
