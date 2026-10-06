@@ -11,6 +11,7 @@ import eu.purrtech.detaillogger.db.dao.TrackedUnitRecord;
 import eu.purrtech.detaillogger.gui.AdminGuiService;
 import eu.purrtech.detaillogger.template.TemplateRegistry;
 import eu.purrtech.detaillogger.tracking.HistoryService;
+import eu.purrtech.detaillogger.tracking.StackDebug;
 import eu.purrtech.detaillogger.tracking.PlayerDirectoryService;
 import eu.purrtech.detaillogger.tracking.ReconciliationSweepTask;
 import eu.purrtech.detaillogger.util.EventLineFormatter;
@@ -107,6 +108,10 @@ public final class PurrLogCommand implements BasicCommand {
             runGui(sender);
             return;
         }
+        if (args.length >= 1 && args[0].equalsIgnoreCase("debug")) {
+            runDebug(sender, args);
+            return;
+        }
         if (args.length == 1 && args[0].equalsIgnoreCase("dbtest")) {
             runDbTest(sender);
             return;
@@ -122,7 +127,41 @@ public final class PurrLogCommand implements BasicCommand {
         sendHelp(sender);
     }
 
+    /** {@code /purrlog debug on|off|dump|clear} - see {@link StackDebug}. */
+    private void runDebug(CommandSender sender, String[] args) {
+        String sub = args.length >= 2 ? args[1].toLowerCase() : "";
+        switch (sub) {
+            case "on" -> {
+                StackDebug.setEnabled(true);
+                sender.sendMessage("Debug ZAPNUT - zapisuje se do " + StackDebug.file().getPath()
+                        + ". Udelej to, co zlobi, pak /purrlog debug off a posli mi ten soubor.");
+            }
+            case "off" -> {
+                StackDebug.setEnabled(false);
+                sender.sendMessage("Debug vypnut. Soubor: " + StackDebug.file().getPath());
+            }
+            case "dump" -> {
+                if (!(sender instanceof org.bukkit.entity.Player player)) {
+                    sender.sendMessage("Jen pro hrace.");
+                    return;
+                }
+                boolean was = StackDebug.isEnabled();
+                StackDebug.setEnabled(true);
+                StackDebug.dumpView("DUMP " + player.getName(), player.getOpenInventory());
+                StackDebug.setEnabled(was);
+                sender.sendMessage("Obsah otevreneho inventare zapsan do debug.log.");
+            }
+            case "clear" -> {
+                boolean cleared = StackDebug.file().delete() || !StackDebug.file().exists();
+                sender.sendMessage(cleared ? "debug.log smazan." : "debug.log se nepodarilo smazat.");
+            }
+            default -> sender.sendMessage("Debug je " + (StackDebug.isEnabled() ? "ZAPNUTY" : "vypnuty")
+                    + ". /purrlog debug on|off|dump|clear");
+        }
+    }
+
     private void sendHelp(CommandSender sender) {
+        sender.sendMessage("/purrlog debug on|off|dump|clear - trace klikani/dragu do debug.log");
         sender.sendMessage("=== PurrTechDetailLogger ===");
         sender.sendMessage("/purrlog gui - otevri admin GUI (vyzaduje DisplayGUI)");
         sender.sendMessage("/purrlog history <uuid> - historie sledovane jednotky");

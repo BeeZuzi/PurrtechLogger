@@ -2,6 +2,7 @@ package eu.purrtech.detaillogger.tracking.listener;
 
 import eu.purrtech.detaillogger.tracking.ItemTrackingService;
 import eu.purrtech.detaillogger.tracking.LocationContext;
+import eu.purrtech.detaillogger.tracking.StackDebug;
 import eu.purrtech.detaillogger.tracking.StackMath;
 import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 import org.bukkit.Bukkit;
@@ -97,18 +98,37 @@ public final class ContainerListener implements Listener {
         if (!(event.getWhoClicked() instanceof Player player)) {
             return;
         }
+        if (StackDebug.isEnabled()) {
+            StackDebug.log("CLICK " + player.getName() + " click=" + event.getClick() + " action=" + event.getAction()
+                    + " slot=" + event.getSlot() + " raw=" + event.getRawSlot()
+                    + " inv=" + (event.getClickedInventory() != null ? event.getClickedInventory().getType() : "null")
+                    + " slotItem=" + StackDebug.describe(event.getCurrentItem())
+                    + " cursor=" + StackDebug.describe(event.getCursor()));
+        }
         // Read before any handler below mutates the slot/cursor.
         TrackedKind clickedKind = trackedKind(event.getCurrentItem());
         LastClick previous = lastClicks.put(player.getUniqueId(), new LastClick(event.getClickedInventory(),
                 event.getSlot(), System.currentTimeMillis(),
                 clickedKind != null ? clickedKind : trackedKind(event.getCursor())));
-        if (tryShiftDoubleClick(event, player, previous)) {
+        boolean handledByHand = tryShiftDoubleClick(event, player, previous);
+        if (StackDebug.isEnabled() && handledByHand) {
+            StackDebug.log("    -> zpracovano rucne: shift-double-click (event zrusen)");
+        }
+        if (handledByHand) {
             lastClicks.remove(player.getUniqueId()); // a 3rd quick click starts over, not another bulk move
             return;
         }
-        if (tryMerge(event, player) || tryGatherOntoCursor(event, player) || tryShiftClick(event, player)) {
+        String handler = tryMerge(event, player) ? "tryMerge"
+                : tryGatherOntoCursor(event, player) ? "tryGatherOntoCursor"
+                : tryShiftClick(event, player) ? "tryShiftClick" : null;
+        if (handler != null) {
+            StackDebug.log("    -> zpracovano rucne: " + handler + " (event zrusen)"
+                    + " slotPo=" + StackDebug.describe(event.getClickedInventory() != null && event.getSlot() >= 0
+                            ? event.getClickedInventory().getItem(event.getSlot()) : null)
+                    + " cursorPo=" + StackDebug.describe(player.getItemOnCursor()));
             return; // handled entirely by hand (event cancelled) - nothing left to reconcile
         }
+        StackDebug.log("    -> nechano vanille (po ticku se jen opravi UUID)");
 
         Inventory clicked = event.getClickedInventory();
         int slot = event.getSlot();
@@ -580,6 +600,13 @@ public final class ContainerListener implements Listener {
             return;
         }
         InventoryView view = event.getView();
+        if (StackDebug.isEnabled()) {
+            StackDebug.log("DRAG " + player.getName() + " type=" + event.getType() + " rawSlots=" + rawSlots
+                    + " cursorPred=" + StackDebug.describe(event.getOldCursor())
+                    + " cursorPo=" + StackDebug.describe(event.getCursor()) + " cancelled=" + event.isCancelled());
+            event.getNewItems().forEach((rawSlot, item) ->
+                    StackDebug.log("    vanilla dava slot " + rawSlot + ": " + StackDebug.describe(item)));
+        }
         // Same reasoning as onClick: schedule a tick later so the drag is fully resolved before
         // reading it back.
         Bukkit.getScheduler().runTask(plugin, () -> reconcileDragResult(view, rawSlots, player));
@@ -662,9 +689,17 @@ public final class ContainerListener implements Listener {
         List<ItemStack> affected = new ArrayList<>();
         affected.add(slotItem);
         affected.add(cursorItem);
+        if (StackDebug.isEnabled()) {
+            StackDebug.log("    reconcile klik (po ticku) PRED: slot " + slot + "=" + StackDebug.describe(slotItem)
+                    + " cursor=" + StackDebug.describe(cursorItem));
+        }
         tracking.reconcileStacks(affected);
         inventory.setItem(slot, slotItem);
         player.setItemOnCursor(cursorItem);
+        if (StackDebug.isEnabled()) {
+            StackDebug.log("    reconcile klik PO:   slot " + slot + "=" + StackDebug.describe(slotItem)
+                    + " cursor=" + StackDebug.describe(cursorItem));
+        }
 
         if (slotItem == null || slotItem.getType().isAir()) {
             return;
@@ -688,7 +723,21 @@ public final class ContainerListener implements Listener {
         // didn't take.
         ItemStack cursor = player.getItemOnCursor();
         affected.add(cursor);
+        if (StackDebug.isEnabled()) {
+            StackDebug.log("    reconcile drag PRED (po ticku):");
+            for (int i = 0; i < rawSlots.size(); i++) {
+                StackDebug.log("        raw " + rawSlots.get(i) + ": " + StackDebug.describe(affected.get(i)));
+            }
+            StackDebug.log("        cursor: " + StackDebug.describe(cursor));
+        }
         tracking.reconcileStacks(affected);
+        if (StackDebug.isEnabled()) {
+            StackDebug.log("    reconcile drag PO:");
+            for (int i = 0; i < rawSlots.size(); i++) {
+                StackDebug.log("        raw " + rawSlots.get(i) + ": " + StackDebug.describe(affected.get(i)));
+            }
+            StackDebug.log("        cursor: " + StackDebug.describe(cursor));
+        }
         affected.remove(affected.size() - 1);
         player.setItemOnCursor(cursor);
 
@@ -714,10 +763,11 @@ public final class ContainerListener implements Listener {
                     .ifPresent(ctx -> tracking.recordLocationForAll(units, ctx, "MOVED", player));
         }
 
-        // A drag can spread a stack across several slots that each already held some of the same
-        // template - same fragmentation problem as shift-click, same fix.
-        consolidate(view.getTopInventory(), player, viewTitle);
-        consolidate(view.getBottomInventory(), player, viewTitle);
+        // No consolidate() here on purpose. A drag IS the player deliberately spreading a stack over
+        // several slots, so sweeping both inventories afterward merged the pieces straight back
+        // into one stack - and, since the sweep covers the whole top inventory too, also into
+        // unrelated same-template stacks in the open chest.
+        StackDebug.dumpView("po dragu - stav", view);
     }
 
     /**

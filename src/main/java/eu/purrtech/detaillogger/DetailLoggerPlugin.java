@@ -16,6 +16,7 @@ import eu.purrtech.detaillogger.tracking.BlockIdentityIndex;
 import eu.purrtech.detaillogger.tracking.BlockTrackingService;
 import eu.purrtech.detaillogger.tracking.HistoryService;
 import eu.purrtech.detaillogger.tracking.ItemTrackingService;
+import eu.purrtech.detaillogger.tracking.StackDebug;
 import eu.purrtech.detaillogger.tracking.PlayerDirectoryService;
 import eu.purrtech.detaillogger.tracking.ReconciliationSweepTask;
 import eu.purrtech.detaillogger.tracking.listener.BlockLifecycleListener;
@@ -66,6 +67,7 @@ public final class DetailLoggerPlugin extends JavaPlugin {
         TemplateMatcher templateMatcher = new TemplateMatcher(templateRegistry);
         ItemTrackingService itemTracking = new ItemTrackingService(
                 itemTag, templateMatcher, templateRegistry, trackedUnitDao, locationDao, eventDao, getLogger());
+        StackDebug.init(getDataFolder(), getLogger(), itemTracking);
         BlockIdentityIndex blockIndex = new BlockIdentityIndex();
         BlockTrackingService blockTracking = new BlockTrackingService(blockTag, itemTag, templateMatcher,
                 templateRegistry, trackedUnitDao, locationDao, eventDao, blockIndex, getLogger());
