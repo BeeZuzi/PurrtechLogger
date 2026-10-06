@@ -51,6 +51,7 @@ public final class DetailLoggerPlugin extends JavaPlugin {
         database = new Database(this);
         database.open();
 
+        saveDefaultConfig();
         saveResource("templates.yml", false);
         File templatesFile = new File(getDataFolder(), "templates.yml");
 

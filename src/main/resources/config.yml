@@ -1,0 +1,8 @@
+# Shift-click and double-click shortcuts for ORDINARY (untracked) items, same as tracked items get:
+#   shift-click       tops up existing stacks front-to-back, then fills empty slots
+#   double-click      fills the cursor stack, then glues the leftovers into the fewest full stacks
+#   shift-double-click moves every matching stack to the other inventory
+# Only in storage inventories (chest, ender chest, barrel, shulker box, hopper, dispenser, dropper)
+# and your own inventory. false = vanilla Minecraft behaviour for ordinary items.
+# Tracked items always use the plugin's handling - vanilla cannot stack them at all.
+plain-item-shortcuts: true

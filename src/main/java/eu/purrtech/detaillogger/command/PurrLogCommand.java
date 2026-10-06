@@ -298,6 +298,7 @@ public final class PurrLogCommand implements BasicCommand {
     }
 
     private void runReload(CommandSender sender) {
+        plugin.reloadConfig();
         sender.sendMessage("Nacitam sablony...");
         Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
             try {

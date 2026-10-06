@@ -26,10 +26,12 @@ import org.bukkit.inventory.PlayerInventory;
 import org.bukkit.plugin.Plugin;
 
 import java.util.ArrayList;
+import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -120,7 +122,8 @@ public final class ContainerListener implements Listener {
         }
         String handler = tryMerge(event, player) ? "tryMerge"
                 : tryGatherOntoCursor(event, player) ? "tryGatherOntoCursor"
-                : tryShiftClick(event, player) ? "tryShiftClick" : null;
+                : tryShiftClick(event, player) ? "tryShiftClick"
+                : tryPlainShortcut(event) ? "tryPlainShortcut" : null;
         if (handler != null) {
             StackDebug.log("    -> zpracovano rucne: " + handler + " (event zrusen)"
                     + " slotPo=" + StackDebug.describe(event.getClickedInventory() != null && event.getSlot() >= 0
@@ -574,6 +577,142 @@ public final class ContainerListener implements Listener {
      */
     private List<UUID> consistentUnits(ItemStack item) {
         return tracking.repairUnits(item);
+    }
+
+    /** Inventories where the plain-item shortcuts are safe: pure storage. Anything with special slot
+     * rules (crafting/furnace/anvil/trade/...) keeps vanilla's own quick-move. */
+    private static final Set<InventoryType> PLAIN_SHORTCUT_STORAGE = EnumSet.of(InventoryType.CHEST,
+            InventoryType.ENDER_CHEST, InventoryType.SHULKER_BOX, InventoryType.BARREL, InventoryType.HOPPER,
+            InventoryType.DISPENSER, InventoryType.DROPPER);
+
+    /**
+     * The same shortcuts tracked items get - shift-click topping up existing stacks front-to-back,
+     * double-click gathering and then gluing the leftovers into full stacks - for ordinary
+     * (untracked) items, which vanilla handles differently (hotbar filled from the end, double-click
+     * stops at one full stack). Switchable via {@code plain-item-shortcuts} in config.yml; tracked
+     * items always take the hand-built path above, since vanilla can't stack them at all.
+     * Shift-double-click needs nothing extra: the client sends one shift-click per matching
+     * stack, and each goes through {@link #plainQuickMove}.
+     */
+    private boolean tryPlainShortcut(InventoryClickEvent event) {
+        Inventory clicked = event.getClickedInventory();
+        if (clicked == null || event.getSlot() < 0 || !plugin.getConfig().getBoolean("plain-item-shortcuts", true)) {
+            return false;
+        }
+        return switch (event.getClick()) {
+            case SHIFT_LEFT, SHIFT_RIGHT -> plainQuickMove(event, clicked);
+            case DOUBLE_CLICK -> plainGather(event, clicked);
+            default -> false;
+        };
+    }
+
+    private boolean plainQuickMove(InventoryClickEvent event, Inventory source) {
+        InventoryView view = event.getView();
+        InventoryType.SlotType slotType = event.getSlotType();
+        ItemStack moving = event.getCurrentItem();
+        if (!PLAIN_SHORTCUT_STORAGE.contains(view.getTopInventory().getType())
+                || (slotType != InventoryType.SlotType.CONTAINER && slotType != InventoryType.SlotType.QUICKBAR)
+                || moving == null || moving.getType().isAir() || tracking.isTracked(moving)) {
+            return false;
+        }
+        Inventory destination = source.equals(view.getTopInventory()) ? view.getBottomInventory() : view.getTopInventory();
+        if (destination.getType() == InventoryType.SHULKER_BOX && moving.getType().name().endsWith("SHULKER_BOX")) {
+            return false; // a shulker can't go into a shulker - vanilla refuses, we must too
+        }
+
+        ItemStack[] contents = movableContents(destination);
+        int max = moving.getMaxStackSize();
+        int left = moving.getAmount();
+        for (int slot = 0; slot < contents.length && left > 0; slot++) { // top up existing stacks first
+            ItemStack existing = contents[slot];
+            if (existing != null && existing.getAmount() < max && existing.isSimilar(moving)) {
+                int add = Math.min(max - existing.getAmount(), left);
+                contents[slot] = existing.clone();
+                contents[slot].setAmount(existing.getAmount() + add);
+                left -= add;
+            }
+        }
+        for (int slot = 0; slot < contents.length && left > 0; slot++) { // then empty slots
+            if (contents[slot] == null || contents[slot].getType().isAir()) {
+                contents[slot] = moving.clone();
+                contents[slot].setAmount(Math.min(max, left));
+                left -= contents[slot].getAmount();
+            }
+        }
+        if (left == moving.getAmount()) {
+            return false; // no room at all
+        }
+
+        setMovableContents(destination, contents);
+        if (left == 0) {
+            source.setItem(event.getSlot(), null);
+        } else {
+            ItemStack remainder = moving.clone();
+            remainder.setAmount(left);
+            source.setItem(event.getSlot(), remainder);
+        }
+        event.setCancelled(true);
+        return true;
+    }
+
+    private boolean plainGather(InventoryClickEvent event, Inventory clicked) {
+        ItemStack cursor = event.getCursor();
+        InventoryType type = clicked.getType();
+        if ((type != InventoryType.PLAYER && !PLAIN_SHORTCUT_STORAGE.contains(type))
+                || cursor == null || cursor.getType().isAir() || tracking.isTracked(cursor)) {
+            return false;
+        }
+        ItemStack[] contents = clicked.getContents();
+        int limit = clicked instanceof PlayerInventory ? Math.min(36, contents.length) : contents.length;
+        int max = cursor.getMaxStackSize();
+        int onCursor = cursor.getAmount();
+        boolean changed = false;
+
+        for (int slot = 0; slot < limit && onCursor < max; slot++) { // fill the cursor stack first
+            ItemStack item = contents[slot];
+            if (item != null && item.isSimilar(cursor)) {
+                int take = Math.min(max - onCursor, item.getAmount());
+                onCursor += take;
+                contents[slot] = take == item.getAmount() ? null : item.clone();
+                if (contents[slot] != null) {
+                    contents[slot].setAmount(item.getAmount() - take);
+                }
+                changed = true;
+            }
+        }
+
+        // Then glue what's left into the fewest stacks: same slots, front-to-back, remainder last.
+        List<Integer> slots = new ArrayList<>();
+        int total = 0;
+        for (int slot = 0; slot < limit; slot++) {
+            if (contents[slot] != null && contents[slot].isSimilar(cursor)) {
+                slots.add(slot);
+                total += contents[slot].getAmount();
+            }
+        }
+        if (slots.size() > (total + max - 1) / max) {
+            for (int slot : slots) {
+                ItemStack stack = contents[slot].clone();
+                stack.setAmount(Math.min(max, total));
+                total -= stack.getAmount();
+                contents[slot] = stack.getAmount() > 0 ? stack : null;
+            }
+            changed = true;
+        }
+        if (!changed) {
+            return false;
+        }
+
+        clicked.setContents(contents);
+        ItemStack gathered = cursor.clone();
+        gathered.setAmount(onCursor);
+        player(event).setItemOnCursor(gathered);
+        event.setCancelled(true);
+        return true;
+    }
+
+    private static Player player(InventoryClickEvent event) {
+        return (Player) event.getWhoClicked();
     }
 
     /**
