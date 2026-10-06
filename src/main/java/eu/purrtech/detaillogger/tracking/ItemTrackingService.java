@@ -57,7 +57,49 @@ public final class ItemTrackingService {
      * verbatim to both halves). See {@link StackReconciler}. No-ops if nothing needs fixing.
      */
     public void reconcileStacks(List<ItemStack> affectedStacks) {
+        backfillSplitShortfall(affectedStacks);
         stackReconciler.reconcile(affectedStacks);
+    }
+
+    /**
+     * A split (drag, right-click take-half) clones one UUID list onto several stacks. If that list
+     * is shorter than the total amount now spread across them (a stack from the old
+     * one-UUID-per-stack genesis), reslicing alone would run out of UUIDs and strip the last
+     * stacks - so mint the missing units first and put them on the first stack, where the reslice
+     * picks them up. Only acts when a UUID really appears on more than one stack (= a clone).
+     */
+    private void backfillSplitShortfall(List<ItemStack> stacks) {
+        java.util.Set<UUID> pool = new java.util.LinkedHashSet<>();
+        int listed = 0;
+        int total = 0;
+        ItemStack first = null;
+        for (ItemStack stack : stacks) {
+            if (stack == null || stack.getType().isAir()) {
+                continue;
+            }
+            List<UUID> units = itemTag.readUnits(stack);
+            if (units.isEmpty()) {
+                continue;
+            }
+            pool.addAll(units);
+            listed += units.size();
+            total += stack.getAmount();
+            if (first == null) {
+                first = stack;
+            }
+        }
+        int shortfall = total - pool.size();
+        if (first == null || listed == pool.size() || shortfall <= 0) {
+            return; // no clone involved, or the list already covers every item
+        }
+        String templateKey = itemTag.readTemplateKey(first);
+        Integer templateId = templateKey != null ? registry.idOf(templateKey) : null;
+        if (templateId == null) {
+            return;
+        }
+        List<UUID> merged = new ArrayList<>(itemTag.readUnits(first));
+        merged.addAll(mintUnits(templateId, shortfall, "STACK_BACKFILL"));
+        itemTag.writeUnits(first, merged, templateKey);
     }
 
     public String readTemplateKey(ItemStack item) {
@@ -175,7 +217,32 @@ public final class ItemTrackingService {
         if (!existing.isEmpty()) {
             return existing;
         }
-        return ensureTracked(item, origin).map(List::of).orElse(List.of());
+        if (ensureTracked(item, origin).isEmpty()) {
+            return List.of();
+        }
+        // Genesis tags one unit per physical item now - return all of them, not just the first.
+        return itemTag.readUnits(item);
+    }
+
+    /**
+     * Makes a stack's unit list match its amount so it can be merged by hand, repairing whatever
+     * is off: an untracked stack that matches a template gets genesis'd, a stack with too few
+     * UUIDs (old one-UUID-per-stack genesis) is topped up, one with too many (vanilla cloned a
+     * longer list onto a smaller split-off stack) is cut to its amount. Mutates the stack's meta
+     * in place - callers only use this on stacks they rewrite into a slot/cursor anyway. Empty if
+     * the stack isn't (and can't become) tracked.
+     */
+    public List<UUID> repairUnits(ItemStack item) {
+        List<UUID> units = ensureTrackedAll(item, "IMPORTED");
+        if (units.isEmpty()) {
+            return units;
+        }
+        int amount = item.getAmount();
+        if (units.size() > amount) {
+            units = new ArrayList<>(units.subList(0, amount));
+            itemTag.writeUnits(item, units, itemTag.readTemplateKey(item));
+        }
+        return units.size() == amount ? units : List.of();
     }
 
     /**

@@ -360,7 +360,9 @@ public final class ContainerListener implements Listener {
 
     /** Material + template of a tracked stack whose unit count matches its amount, else null. */
     private TrackedKind trackedKind(ItemStack item) {
-        if (item == null || item.getType().isAir() || consistentUnits(item).isEmpty()) {
+        // Read-only on purpose (no repair): runs on every click, including on stacks nothing here
+        // rewrites - a mismatched unit count still counts as "tracked" for classification.
+        if (item == null || item.getType().isAir() || tracking.readAllUnits(item).isEmpty()) {
             return null;
         }
         String templateKey = tracking.readTemplateKey(item);
@@ -474,15 +476,16 @@ public final class ContainerListener implements Listener {
     }
 
     /**
-     * Units on a stack for hand-built merging, or empty (= "leave it to vanilla") if the stack's
-     * UUID count doesn't match its amount. Every merge here sets the result's amount from the unit
-     * count, so a 64-stack still carrying the old single-UUID-per-stack genesis tag would shrink to
-     * 1 item. Such stacks get repaired by {@code ItemTrackingService#ensureTrackedAll} on the next
-     * open/join/pickup scan instead.
+     * Units on a stack for hand-built merging, repaired first so the count always equals the
+     * stack's amount (see {@code ItemTrackingService#repairUnits}): an untracked stack matching a
+     * template is genesis'd, a too-short list (old genesis) topped up, a too-long one (left by a
+     * vanilla split) cut. Every merge here sets the result's amount from the unit count, so an
+     * unrepaired stack would shrink or refuse to merge. Empty only if the stack can't be tracked at
+     * all ("leave it to vanilla"). Mutates the stack passed in - only call it on stacks that get
+     * rewritten into a slot/cursor afterward.
      */
     private List<UUID> consistentUnits(ItemStack item) {
-        List<UUID> units = tracking.readAllUnits(item);
-        return units.size() == item.getAmount() ? units : List.of();
+        return tracking.repairUnits(item);
     }
 
     /**
@@ -679,7 +682,15 @@ public final class ContainerListener implements Listener {
         for (int rawSlot : rawSlots) {
             affected.add(view.getItem(rawSlot));
         }
+        // The stack still on the cursor after the drag is part of the same split: vanilla cloned the
+        // full UUID list onto it too, so leaving it out of the reslice kept a too-long list on it
+        // (and let the slots run out of UUIDs). Last in the list = it gets whatever the slots
+        // didn't take.
+        ItemStack cursor = player.getItemOnCursor();
+        affected.add(cursor);
         tracking.reconcileStacks(affected);
+        affected.remove(affected.size() - 1);
+        player.setItemOnCursor(cursor);
 
         String viewTitle = plainTitle(view);
         for (int i = 0; i < rawSlots.size(); i++) {
