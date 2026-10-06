@@ -6,3 +6,27 @@
 # and your own inventory. false = vanilla Minecraft behaviour for ordinary items.
 # Tracked items always use the plugin's handling - vanilla cannot stack them at all.
 plain-item-shortcuts: true
+
+# How many pending history/location writes the plugin may hold in memory while the database catches up
+# (units, templates and players are never dropped). Rough RAM at full: ~0.3 KB per write, so 5 000 000
+# is about 1.5 GB. Lower it on a small server. When the queue fills up, low-priority events go first.
+max-pending-writes: 5000000
+
+# How important is each event type to you. HIGHEST, HIGH, MEDIUM, LOW, LOWEST or OFF.
+# Normal load: everything is stored. Under heavy load (queue filling up) events are dropped by
+# priority: LOWEST stops being accepted at 50% full, LOW at 65%, MEDIUM at 80%, HIGH at 92%,
+# HIGHEST only at 100%. OFF = never stored (an item's current location is still kept up to date).
+# A type that is not listed here is MEDIUM.
+event-priority:
+  GENESIS: HIGH              # a tracked item/unit was created
+  PLACED: HIGH               # placed as a block
+  DESTROYED: HIGH            # destroyed (lava, fire, despawn...)
+  CREATIVE_DUPLICATE: HIGHEST # duplicated in creative mode
+  SHULKER_OPENED: HIGH       # shulker opened: what was in it, what was taken/put in
+  DROPPED: MEDIUM
+  PICKED_UP: MEDIUM
+  SPAWNED: MEDIUM
+  MERGED: LOW                # stacks merged
+  SEEN: LOW                  # spotted when opening a container / joining
+  VIEWED_IN_MENU: LOW
+  MOVED: LOWEST              # moved between slots - by far the most frequent

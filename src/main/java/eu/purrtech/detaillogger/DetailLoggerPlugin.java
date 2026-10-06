@@ -52,6 +52,7 @@ public final class DetailLoggerPlugin extends JavaPlugin {
         database.open();
 
         saveDefaultConfig();
+        applyWriteQueueConfig();
         saveResource("templates.yml", false);
         File templatesFile = new File(getDataFolder(), "templates.yml");
 
@@ -111,6 +112,26 @@ public final class DetailLoggerPlugin extends JavaPlugin {
         // Every 30s: re-derive ground truth from what's physically on online players and
         // cross-check it against the DB - see ReconciliationSweepTask's own docs for scope.
         Bukkit.getScheduler().runTaskTimer(this, sweepTask::runSweep, 20L * 30, 20L * 30);
+    }
+
+    /** Reads {@code max-pending-writes} and {@code event-priority} from config.yml into the DB
+     * write queue. Called on enable and again by {@code /purrlog reload}. */
+    public void applyWriteQueueConfig() {
+        java.util.Map<String, eu.purrtech.detaillogger.db.WritePriority> priorities = new java.util.HashMap<>();
+        org.bukkit.configuration.ConfigurationSection section = getConfig().getConfigurationSection("event-priority");
+        if (section != null) {
+            for (String type : section.getKeys(false)) {
+                String value = String.valueOf(section.getString(type)).trim().toUpperCase(java.util.Locale.ROOT);
+                try {
+                    priorities.put(type.toUpperCase(java.util.Locale.ROOT),
+                            eu.purrtech.detaillogger.db.WritePriority.valueOf(value));
+                } catch (IllegalArgumentException e) {
+                    getLogger().warning("config.yml event-priority." + type + ": neznama hodnota '" + value
+                            + "' (HIGHEST/HIGH/MEDIUM/LOW/LOWEST/OFF) - pouzivam MEDIUM");
+                }
+            }
+        }
+        database.writeQueue().configure(Math.max(1000, getConfig().getInt("max-pending-writes", 5_000_000)), priorities);
     }
 
     @Override

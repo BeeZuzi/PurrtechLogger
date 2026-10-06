@@ -20,6 +20,7 @@ class WriteQueueTest {
     @Test
     void bulkIsCappedButUnitsAreNeverDropped() {
         WriteQueue queue = new WriteQueue(3, Logger.getAnonymousLogger());
+        queue.configure(3, java.util.Map.of("SEEN", WritePriority.HIGHEST)); // MEDIUM would stop at 80%
         for (int i = 0; i < 10; i++) {
             queue.offer(event());
         }
@@ -32,6 +33,28 @@ class WriteQueueTest {
         assertEquals(13, drained.size());
         queue.offer(event());
         assertEquals(1, queue.size());
+    }
+
+    private static DbTask event(String type) {
+        return new DbTask.InsertEventTask("u", type, 0, null, null, null, null, null, null, null, null);
+    }
+
+    @Test
+    void lowPriorityIsShedFirstAndOffIsNeverStored() {
+        WriteQueue queue = new WriteQueue(100, Logger.getAnonymousLogger());
+        queue.configure(100, java.util.Map.of("MOVED", WritePriority.LOWEST, "GENESIS", WritePriority.HIGHEST,
+                "SEEN", WritePriority.OFF));
+        for (int i = 0; i < 100; i++) {
+            queue.offer(event("MOVED"));
+        }
+        assertEquals(50, queue.size()); // LOWEST stops at 50% full
+        for (int i = 0; i < 100; i++) {
+            queue.offer(event("GENESIS"));
+        }
+        assertEquals(100, queue.size()); // HIGHEST fills the rest, then is dropped too
+        queue.drain(100);
+        queue.offer(event("SEEN"));
+        assertEquals(0, queue.size()); // OFF: not stored
     }
 
     @Test

@@ -2,6 +2,7 @@ package eu.purrtech.detaillogger.db;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -32,12 +33,20 @@ public final class WriteQueue {
     private final AtomicInteger bulkPending = new AtomicInteger();
     private final AtomicLong droppedSinceLog = new AtomicLong();
     private volatile long lastDropLogAt;
-    private final int bulkCapacity;
+    private volatile int bulkCapacity;
+    /** Event type -> priority (config.yml {@code event-priority}); a type not listed is MEDIUM. */
+    private volatile Map<String, WritePriority> eventPriorities = Map.of();
     private final Logger logger;
 
     WriteQueue(int bulkCapacity, Logger logger) {
         this.bulkCapacity = bulkCapacity;
         this.logger = logger;
+    }
+
+    /** Applies config.yml; safe to call again on /purrlog reload. */
+    public void configure(int bulkCapacity, Map<String, WritePriority> eventPriorities) {
+        this.bulkCapacity = bulkCapacity;
+        this.eventPriorities = Map.copyOf(eventPriorities);
     }
 
     private static boolean isBulk(DbTask task) {
@@ -46,9 +55,25 @@ public final class WriteQueue {
                 || task instanceof DbTask.InsertDupeAlertTask;
     }
 
+    /**
+     * Priority a bulk task is queued at. Events use their type's configured priority; a unit's
+     * location row is current state, not history, so it ranks HIGH regardless of which event
+     * moved it (an OFF event type still keeps its location up to date); dupe alerts are HIGHEST.
+     */
+    private WritePriority priorityOf(DbTask task) {
+        if (task instanceof DbTask.InsertEventTask event) {
+            return eventPriorities.getOrDefault(event.eventType(), WritePriority.MEDIUM);
+        }
+        return task instanceof DbTask.InsertDupeAlertTask ? WritePriority.HIGHEST : WritePriority.HIGH;
+    }
+
     public void offer(DbTask task) {
         if (isBulk(task)) {
-            if (bulkPending.incrementAndGet() > bulkCapacity) {
+            WritePriority priority = priorityOf(task);
+            if (priority == WritePriority.OFF) {
+                return; // owner turned this event type off - not a load drop, nothing to log
+            }
+            if (bulkPending.incrementAndGet() > priority.limit(bulkCapacity)) {
                 bulkPending.decrementAndGet();
                 droppedSinceLog.incrementAndGet();
                 logDrops();
