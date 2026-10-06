@@ -52,6 +52,15 @@ final class DbWriterThread extends Thread {
     }
 
     private void flush(List<DbTask> batch) {
+        flush(batch, true);
+    }
+
+    /**
+     * One bad row (e.g. an FK pointing at a unit that was never inserted) used to roll back the
+     * whole batch - up to {@link #MAX_BATCH} unrelated writes lost with it. A failed multi-task
+     * batch is now retried task by task, so only the offending task is dropped (and logged by name).
+     */
+    private void flush(List<DbTask> batch, boolean retryIndividually) {
         try {
             connection.setAutoCommit(false);
             try (PreparedStatement events = connection.prepareStatement("""
@@ -216,7 +225,17 @@ final class DbWriterThread extends Thread {
                 connection.setAutoCommit(true);
             }
         } catch (SQLException e) {
-            logger.log(Level.SEVERE, "Failed to flush " + batch.size() + " database write task(s)", e);
+            if (retryIndividually && batch.size() > 1) {
+                logger.warning("Davka " + batch.size() + " zapisu selhala (" + e.getMessage()
+                        + "), zkousim po jednom a vadny preskocim");
+                for (DbTask task : batch) {
+                    flush(List.of(task), false);
+                }
+            } else {
+                String text = String.valueOf(batch.get(0));
+                logger.log(Level.SEVERE, "Zapis do DB preskocen (" + e.getMessage() + "): "
+                        + (text.length() > 400 ? text.substring(0, 400) + "..." : text));
+            }
         }
     }
 
