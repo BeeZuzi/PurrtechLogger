@@ -41,7 +41,10 @@ public final class Database {
             configure(writerConnection);
             new SchemaMigrator(writerConnection, logger).migrate();
 
-            writeQueue = new WriteQueue(10_000, logger);
+            // Cap on pending events/locations only (units/templates are never dropped, see WriteQueue).
+            // Was 10_000 total - one player joining with a full inventory of tracked stacks, now one
+            // UUID per item, already queued ~9k tasks.
+            writeQueue = new WriteQueue(100_000, logger);
             writerThread = new DbWriterThread(writerConnection, writeQueue, logger);
             writerThread.start();
 

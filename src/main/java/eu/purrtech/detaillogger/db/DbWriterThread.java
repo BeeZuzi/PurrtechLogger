@@ -17,7 +17,8 @@ import java.util.logging.Logger;
  */
 final class DbWriterThread extends Thread {
 
-    private static final int MAX_BATCH = 200;
+    // One transaction per batch, so bigger = fewer commits per second (the write throughput limit).
+    private static final int MAX_BATCH = 2000;
     private static final long POLL_TIMEOUT_MS = 50;
 
     private final Connection connection;
@@ -136,6 +137,7 @@ final class DbWriterThread extends Thread {
                 int setPlayerOfflineCount = 0;
                 int insertNameHistoryCount = 0;
                 boolean resetAllOfflineRequested = false;
+                java.util.Map<String, DbTask.UpsertLocationTask> latestLocation = new java.util.LinkedHashMap<>();
 
                 for (DbTask task : batch) {
                     switch (task) {
@@ -149,11 +151,9 @@ final class DbWriterThread extends Thread {
                             units.addBatch();
                             unitCount++;
                         }
-                        case DbTask.UpsertLocationTask t -> {
-                            bindLocation(locations, t);
-                            locations.addBatch();
-                            locationCount++;
-                        }
+                        // A unit's location row is overwritten by each upsert, so only the last one in
+                        // a batch matters (join scan: SEEN then MOVED for the same item) - bound once.
+                        case DbTask.UpsertLocationTask t -> latestLocation.put(t.unitUuid(), t);
                         case DbTask.InsertDupeAlertTask t -> {
                             bindAlert(alerts, t);
                             alerts.addBatch();
@@ -199,6 +199,12 @@ final class DbWriterThread extends Thread {
                         }
                         case DbTask.ResetAllPlayersOfflineTask t -> resetAllOfflineRequested = true;
                     }
+                }
+
+                for (DbTask.UpsertLocationTask t : latestLocation.values()) {
+                    bindLocation(locations, t);
+                    locations.addBatch();
+                    locationCount++;
                 }
 
                 // Order matters: foreign keys are enforced immediately (not deferred), so anything
