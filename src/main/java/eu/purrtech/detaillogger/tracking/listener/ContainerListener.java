@@ -14,6 +14,7 @@ import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.event.inventory.ClickType;
+import org.bukkit.event.inventory.InventoryAction;
 import org.bukkit.event.inventory.DragType;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryDragEvent;
@@ -108,6 +109,19 @@ public final class ContainerListener implements Listener {
                     + " inv=" + (event.getClickedInventory() != null ? event.getClickedInventory().getType() : "null")
                     + " slotItem=" + StackDebug.describe(event.getCurrentItem())
                     + " cursor=" + StackDebug.describe(event.getCursor()));
+        }
+        if (event.getAction() == InventoryAction.CLONE_STACK && player.getGameMode() == GameMode.CREATIVE) {
+            // Middle-click in creative copies the stack onto the cursor, UUIDs and all. The reconcile
+            // below would read that as a split of an under-tagged stack and relabel the copy as
+            // STACK_BACKFILL (seen in a real debug.log) - it is a creative duplicate, say so.
+            StackDebug.log("    -> kreativni kopie stacku na kurzor, dostane nova UUID");
+            Bukkit.getScheduler().runTask(plugin, () -> {
+                ItemStack copy = player.getItemOnCursor();
+                if (!copy.getType().isAir() && !relabelAsCreativeCopy(copy).isEmpty()) {
+                    player.setItemOnCursor(copy);
+                }
+            });
+            return;
         }
         // Read before any handler below mutates the slot/cursor.
         TrackedKind clickedKind = trackedKind(event.getCurrentItem());
@@ -841,10 +855,32 @@ public final class ContainerListener implements Listener {
      */
     private static boolean isCreativeCloneDrag(InventoryDragEvent event, Player player) {
         ItemStack before = event.getOldCursor();
-        ItemStack after = event.getCursor();
-        return player.getGameMode() == GameMode.CREATIVE && !event.getNewItems().isEmpty()
-                && before != null && after != null && !after.getType().isAir()
-                && after.getAmount() == before.getAmount();
+        if (player.getGameMode() != GameMode.CREATIVE || before == null) {
+            return false;
+        }
+        int placed = 0;
+        for (ItemStack item : event.getNewItems().values()) {
+            placed += item.getAmount();
+        }
+        // Measured from a real debug.log: a clone drag of 10 diamonds over 8 slots makes vanilla place
+        // 8 x 64, and leaves the cursor EMPTY afterwards (so "cursor unchanged" is no test at all). A
+        // real spread can never place more than the cursor holds - vanilla skips non-similar stacks,
+        // and a tracked stack is never similar - so placed > cursor means items are being created.
+        return placed > before.getAmount();
+    }
+
+    /** Fresh UUIDs for a creative copy of exactly its amount (a stack whose unit list is shorter - e.g.
+     * 10 units cloned up to 64 - cycles through the originals). Empty if the stack isn't tracked. */
+    private List<UUID> relabelAsCreativeCopy(ItemStack item) {
+        List<UUID> originals = tracking.readAllUnits(item);
+        if (originals.isEmpty()) {
+            return List.of();
+        }
+        List<UUID> sources = new ArrayList<>(item.getAmount());
+        for (int i = 0; i < item.getAmount(); i++) {
+            sources.add(originals.get(i % originals.size()));
+        }
+        return tracking.registerCreativeDuplicate(item, sources);
     }
 
     /** Every clone-dragged stack is a new physical copy: mint fresh UUIDs, linked to the originals. */
@@ -856,11 +892,7 @@ public final class ContainerListener implements Listener {
             if (item == null || item.getType().isAir() || inventory == null) {
                 continue;
             }
-            List<UUID> originals = tracking.readAllUnits(item);
-            if (originals.isEmpty()) {
-                continue;
-            }
-            List<UUID> fresh = tracking.registerCreativeDuplicate(item, originals);
+            List<UUID> fresh = relabelAsCreativeCopy(item);
             if (fresh.isEmpty()) {
                 continue;
             }
