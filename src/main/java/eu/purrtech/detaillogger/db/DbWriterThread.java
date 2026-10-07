@@ -45,6 +45,12 @@ final class DbWriterThread extends Thread {
                 List<DbTask> batch = new ArrayList<>(MAX_BATCH);
                 batch.add(first);
                 batch.addAll(queue.drain(MAX_BATCH - 1));
+                if (connectionClosed()) {
+                    // Closed under us (shutdown timed out): say it once, not once per leftover batch.
+                    int lost = batch.size() + queue.drain(Integer.MAX_VALUE).size();
+                    logger.severe("Spojeni s DB je zavrene - " + lost + " cekajicich zapisu zahozeno.");
+                    return;
+                }
                 flush(batch);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
@@ -52,16 +58,26 @@ final class DbWriterThread extends Thread {
         }
     }
 
+    private boolean connectionClosed() {
+        try {
+            return connection.isClosed();
+        } catch (SQLException e) {
+            return true;
+        }
+    }
+
     private void flush(List<DbTask> batch) {
-        flush(batch, true);
+        flush(batch, false);
     }
 
     /**
      * One bad row (e.g. an FK pointing at a unit that was never inserted) used to roll back the
      * whole batch - up to {@link #MAX_BATCH} unrelated writes lost with it. A failed multi-task
-     * batch is now retried task by task, so only the offending task is dropped (and logged by name).
+     * batch that fails on a constraint is redone once in {@code lenient} mode (one transaction, one
+     * statement at a time), so only the offending rows are skipped (the first few logged by name).
      */
-    private void flush(List<DbTask> batch, boolean retryIndividually) {
+    private void flush(List<DbTask> batch, boolean lenient) {
+        skipped = 0;
         long startedNanos = System.nanoTime();
         try {
             connection.setAutoCommit(false);
@@ -144,12 +160,12 @@ final class DbWriterThread extends Thread {
                     switch (task) {
                         case DbTask.InsertEventTask t -> {
                             bindEvent(events, t);
-                            events.addBatch();
+                            queueOrRun(events, lenient, task);
                             eventCount++;
                         }
                         case DbTask.UpsertTrackedUnitTask t -> {
                             bindUnit(units, t);
-                            units.addBatch();
+                            queueOrRun(units, lenient, task);
                             unitCount++;
                         }
                         // A unit's location row is overwritten by each upsert, so only the last one in
@@ -157,23 +173,23 @@ final class DbWriterThread extends Thread {
                         case DbTask.UpsertLocationTask t -> latestLocation.put(t.unitUuid(), t);
                         case DbTask.InsertDupeAlertTask t -> {
                             bindAlert(alerts, t);
-                            alerts.addBatch();
+                            queueOrRun(alerts, lenient, task);
                             alertCount++;
                         }
                         case DbTask.UpsertTemplateTask t -> {
                             bindTemplate(templates, t);
-                            templates.addBatch();
+                            queueOrRun(templates, lenient, task);
                             templateCount++;
                         }
                         case DbTask.MarkUnitDestroyedTask t -> {
                             bindMarkDestroyed(markDestroyed, t);
-                            markDestroyed.addBatch();
+                            queueOrRun(markDestroyed, lenient, task);
                             markDestroyedCount++;
                         }
                         case DbTask.UpdateUnitKindTask t -> {
                             updateKind.setString(1, t.kind());
                             updateKind.setString(2, t.uuid());
-                            updateKind.addBatch();
+                            queueOrRun(updateKind, lenient, task);
                             updateKindCount++;
                         }
                         case DbTask.UpsertPlayerTask t -> {
@@ -182,20 +198,20 @@ final class DbWriterThread extends Thread {
                             upsertPlayer.setLong(3, t.joinedAt());
                             upsertPlayer.setLong(4, t.joinedAt());
                             upsertPlayer.setBoolean(5, t.online());
-                            upsertPlayer.addBatch();
+                            queueOrRun(upsertPlayer, lenient, task);
                             upsertPlayerCount++;
                         }
                         case DbTask.SetPlayerOfflineTask t -> {
                             setPlayerOffline.setLong(1, t.lastSeenAt());
                             setPlayerOffline.setString(2, t.uuid());
-                            setPlayerOffline.addBatch();
+                            queueOrRun(setPlayerOffline, lenient, task);
                             setPlayerOfflineCount++;
                         }
                         case DbTask.InsertNameHistoryTask t -> {
                             insertNameHistory.setString(1, t.playerUuid());
                             insertNameHistory.setString(2, t.name());
                             insertNameHistory.setLong(3, t.changedAt());
-                            insertNameHistory.addBatch();
+                            queueOrRun(insertNameHistory, lenient, task);
                             insertNameHistoryCount++;
                         }
                         case DbTask.ResetAllPlayersOfflineTask t -> resetAllOfflineRequested = true;
@@ -204,7 +220,7 @@ final class DbWriterThread extends Thread {
 
                 for (DbTask.UpsertLocationTask t : latestLocation.values()) {
                     bindLocation(locations, t);
-                    locations.addBatch();
+                    queueOrRun(locations, lenient, t);
                     locationCount++;
                 }
 
@@ -225,7 +241,10 @@ final class DbWriterThread extends Thread {
                 if (resetAllOfflineRequested) resetAllOffline.executeUpdate();
 
                 connection.commit();
-                queue.recordFlush(batch.size(), System.nanoTime() - startedNanos);
+                queue.recordFlush(batch.size() - skipped, System.nanoTime() - startedNanos);
+                if (skipped > MAX_LOGGED_SKIPS) {
+                    logger.severe("... a dalsich " + (skipped - MAX_LOGGED_SKIPS) + " zapisu v teto davce preskoceno");
+                }
             } catch (SQLException e) {
                 connection.rollback();
                 throw e;
@@ -233,18 +252,51 @@ final class DbWriterThread extends Thread {
                 connection.setAutoCommit(true);
             }
         } catch (SQLException e) {
-            if (retryIndividually && batch.size() > 1) {
-                logger.warning("Davka " + batch.size() + " zapisu selhala (" + e.getMessage()
-                        + "), zkousim po jednom a vadny preskocim");
-                for (DbTask task : batch) {
-                    flush(List.of(task), false);
-                }
+            if (!lenient && isConstraintViolation(e)) {
+                // A constraint (usually an FK to a unit that was never inserted) broke one row. Redo the
+                // batch ONCE, in a single transaction, one statement at a time, skipping only the bad
+                // rows. (Retrying each task in its own transaction made the writer ~100x slower and the
+                // queue backed up while it did.)
+                logger.warning("Davka " + batch.size() + " zapisu narazila na neplatny odkaz (" + e.getMessage()
+                        + ") - zapisuji znovu po jednom a vadne radky preskocim");
+                flush(batch, true);
             } else {
-                String text = String.valueOf(batch.get(0));
-                logger.log(Level.SEVERE, "Zapis do DB preskocen (" + e.getMessage() + "): "
-                        + (text.length() > 400 ? text.substring(0, 400) + "..." : text));
+                // Not a bad row but a broken connection / lock: retrying task by task would only repeat it.
+                logger.log(Level.SEVERE, "Davka " + batch.size() + " zapisu zahozena: " + e.getMessage());
             }
         }
+    }
+
+    private static final int MAX_LOGGED_SKIPS = 5;
+    private int skipped;
+
+    /**
+     * Normal mode: add to the batch (executed later, grouped by type). Lenient mode (the redo after
+     * a constraint failure): run now, and skip - not abort on - a row the DB rejects.
+     */
+    private void queueOrRun(PreparedStatement ps, boolean lenient, DbTask task) throws SQLException {
+        if (!lenient) {
+            ps.addBatch();
+            return;
+        }
+        try {
+            ps.executeUpdate();
+        } catch (SQLException e) {
+            if (!isConstraintViolation(e)) {
+                throw e;
+            }
+            skipped++;
+            if (skipped <= MAX_LOGGED_SKIPS) {
+                String text = String.valueOf(task);
+                logger.severe("Zapis do DB preskocen (" + e.getMessage() + "): "
+                        + (text.length() > 300 ? text.substring(0, 300) + "..." : text));
+            }
+        }
+    }
+
+    private static boolean isConstraintViolation(SQLException e) {
+        String message = e.getMessage();
+        return message != null && message.contains("SQLITE_CONSTRAINT");
     }
 
     private static void bindEvent(PreparedStatement ps, DbTask.InsertEventTask t) throws SQLException {
@@ -338,7 +390,12 @@ final class DbWriterThread extends Thread {
     void shutdown() {
         running = false;
         try {
-            join(5000);
+            // The writer keeps draining after running=false, so give it time to finish - closing the
+            // connection under a still-draining writer is what used to throw away the whole backlog.
+            join(30_000);
+            if (isAlive()) {
+                logger.severe("Zapisovac DB nestihl do 30 s vyprazdnit frontu (zbyva " + queue.size() + " zapisu).");
+            }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
