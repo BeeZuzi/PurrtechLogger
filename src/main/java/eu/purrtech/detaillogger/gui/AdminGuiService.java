@@ -195,7 +195,9 @@ public final class AdminGuiService implements Listener {
      * events list is a single {@code button_list_scroll} now, scrolled by mouse wheel instead of
      * paged with prev/next buttons. */
     private static final class EventsFilter {
-        private String activeCategory;
+        /** Checked categories. Empty = no category filter = "Vse" (so "Vse" can never be on together
+         * with any other box - it simply means none of them are checked). */
+        private final java.util.Set<String> activeCategories = new java.util.LinkedHashSet<>();
         private Long from;
         private Long to;
         private boolean relativeTime = false;
@@ -378,7 +380,10 @@ public final class AdminGuiService implements Listener {
 
     /** Item detail page layout - history list left, item + its info right ("UUID a další
      * informace ohledně daného itemu dej doprava"). Not yet confirmed in-game. */
-    private static final double ITEM_HISTORY_COLUMN_X = -1.3;
+    // Was -1.3 / bottom row at -1.0+4*0.65: the bottom row sat on the "Zpet" button (cx(0), cy(1.6)).
+    // Moved left to -2.1 and the whole list up 0.5 (see ITEM_HISTORY_TOP_Y).
+    private static final double ITEM_HISTORY_COLUMN_X = -2.1;
+    private static final double ITEM_HISTORY_TOP_Y = -1.5;
     private static final float ITEM_HISTORY_ROTATION_Y_DEGREES = 10f;
     private static final double ITEM_INFO_COLUMN_X = 2.9;
     private static final String ITEM_ICON_ID = "item-icon";
@@ -434,7 +439,7 @@ public final class AdminGuiService implements Listener {
         List<EventRecord> events = new ArrayList<>(history.events());
         events.sort(Comparator.comparingLong(EventRecord::timestamp).reversed());
         double rowStepY = 0.65;
-        double bottomRowY = -1.0 + (EVENTS_VISIBLE_ROWS - 1) * rowStepY;
+        double bottomRowY = ITEM_HISTORY_TOP_Y + (EVENTS_VISIBLE_ROWS - 1) * rowStepY;
         EventsFilter filter = eventsFilters.get(player.getUniqueId());
         boolean relativeTime = filter != null && filter.relativeTime;
         Map<String, String> materials = materialName != null ? Map.of(unit.uuid(), materialName) : Map.of();
@@ -849,6 +854,14 @@ public final class AdminGuiService implements Listener {
      * ("dej ty hitboxy blíže k té vrstvě"). Half a tile puts each tile's front face on the layer. */
     private static final double ROTATED_TILE_HITBOX_RECESS_Z = -(0.5 * PIXELS_PER_BLOCK) / 2.0;
 
+    /** How far (blocks) the list rows' visuals sit behind where DisplayGUI puts them. The list pushes
+     * every row 0.5 block toward the player so the row hitboxes win over the list's own - that left the
+     * rows floating well in front of the list frame ("moc vepredu"). The visuals are pulled back by this
+     * much, and the row hitboxes are recessed by the same amount so they stay on the visual. */
+    private static final double EVENTS_ROW_PULL_BACK_BLOCKS = 0.3;
+    private static final double EVENTS_ROW_HITBOX_RECESS_Z =
+            ROTATED_TILE_HITBOX_RECESS_Z - EVENTS_ROW_PULL_BACK_BLOCKS * PIXELS_PER_BLOCK;
+
     private static String formatTime(Long epochMillis) {
         return EventLineFormatter.formatTime(epochMillis);
     }
@@ -869,7 +882,7 @@ public final class AdminGuiService implements Listener {
     public void openEventsPage(Player player) {
         lastPage.put(player.getUniqueId(), () -> openEventsPage(player));
         EventsFilter filter = eventsFilters.computeIfAbsent(player.getUniqueId(), id -> new EventsFilter());
-        List<String> types = filter.activeCategory != null ? List.of(filter.activeCategory) : List.of();
+        List<String> types = List.copyOf(filter.activeCategories);
         Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
             try {
                 List<EventRecord> events = eventDao.findFiltered(types, filter.from, filter.to, EVENTS_LIST_LIMIT);
@@ -913,7 +926,7 @@ public final class AdminGuiService implements Listener {
             double x = startX + (i % columns) * stepX;
             double y = startY + (i / columns) * stepY;
             lastRowY = Math.max(lastRowY, y);
-            boolean active = type.equals("ALL") ? filter.activeCategory == null : type.equals(filter.activeCategory);
+            boolean active = type.equals("ALL") ? filter.activeCategories.isEmpty() : filter.activeCategories.contains(type);
             String label = type.equals("ALL") ? "Vse" : CATEGORY_LABELS.getOrDefault(type, type);
             buttons.add(compactButton("cat-" + type, cx(x), cy(y), 0.05, label, e -> toggleCategory(player, type), active));
         }
@@ -929,7 +942,7 @@ public final class AdminGuiService implements Listener {
         double columnX = 3.35;
         // Was -0.2 - raised so the bottom row no longer clips into the ground ("jedna ta událost
         // dole se buguje do země").
-        double rowStartY = -1.0;
+        double rowStartY = -1.3; // was -1.0: raised 0.3 ("zvedni tak o 0.3")
         double rowStepY = 0.65;
         // The list's own .at() anchor is documented to be the BOTTOM row (row 0/topmost sits above
         // it, built up by rowSpacingBlocks per row) - see eventsListButton - so this is
@@ -945,10 +958,10 @@ public final class AdminGuiService implements Listener {
         // Info panel sits directly under the filter column now that the date row moved out - per
         // "vlevo ty filtr tlačítka... dej jim tam více prostoru".
         List<String> infoLines = new ArrayList<>();
-        infoLines.add("Kategorie: " + (filter.activeCategory != null
-                ? CATEGORY_LABELS.getOrDefault(filter.activeCategory, filter.activeCategory) : "vsechny"));
+        infoLines.add("Kategorie: " + describeCategories(filter));
         infoLines.add("Zaznamu: " + events.size() + (events.size() >= EVENTS_LIST_LIMIT ? "+" : ""));
-        buttons.add(infoTextButton(cx(filterCenterX), cy(lastRowY + 0.4), 0.04, infoLines));
+        // +0.6 (was +0.4): moved down 0.2 - it covered the Shulker button, the 13th filter box.
+        buttons.add(infoTextButton(cx(filterCenterX), cy(lastRowY + 0.6), 0.04, infoLines));
 
         // Time-display-mode toggle ("určí si hráč ve filtru") + date range, stacked vertically in
         // the center column - opens the small in-game calendar instead of a chat prompt.
@@ -975,14 +988,35 @@ public final class AdminGuiService implements Listener {
 
         buttons.add(navButton("back", cx(0), cy(afterDateY + 0.25), 0.05, "Hlavni menu", e -> openMainMenu(player)));
 
-        String pageKey = "purrtechlog:events:" + (filter.activeCategory != null ? filter.activeCategory : "all");
+        String pageKey = "purrtechlog:events:" + (filter.activeCategories.isEmpty()
+                ? "all" : String.join("+", filter.activeCategories));
         ScreenPageData screen = new ScreenPageData(backgroundPage(), buttons, pageKey, MENU_DISTANCE_PIXELS);
         DisplayGuiAPI.openMenu(player, screen);
     }
 
+    /** "vsechny", the labels of up to 2 checked categories, or "N vybranych" for more. */
+    private static String describeCategories(EventsFilter filter) {
+        if (filter.activeCategories.isEmpty()) {
+            return "vsechny";
+        }
+        if (filter.activeCategories.size() > 2) {
+            return filter.activeCategories.size() + " vybranych";
+        }
+        return filter.activeCategories.stream()
+                .map(type -> CATEGORY_LABELS.getOrDefault(type, type))
+                .collect(java.util.stream.Collectors.joining(", "));
+    }
+
     private void toggleCategory(Player player, String type) {
         EventsFilter filter = eventsFilters.computeIfAbsent(player.getUniqueId(), id -> new EventsFilter());
-        filter.activeCategory = (type.equals("ALL") || type.equals(filter.activeCategory)) ? null : type;
+        if (type.equals("ALL")) {
+            filter.activeCategories.clear(); // "Vse" = no category checked
+        } else if (!filter.activeCategories.remove(type)) {
+            filter.activeCategories.add(type);
+        }
+        if (filter.activeCategories.size() == EVENT_CATEGORIES.size()) {
+            filter.activeCategories.clear(); // every box checked is the same as "Vse"
+        }
         openEventsPage(player);
     }
 
@@ -1007,7 +1041,8 @@ public final class AdminGuiService implements Listener {
                                        Consumer<MenuActionContext> onHoverStart, Consumer<MenuActionContext> onHoverEnd) {
         // Text shifted right by half an icon so text + icon together are centered on the button -
         // the (always centered) hitbox then only needs to be text + icon wide.
-        TextDisplayLayerData text = new TextDisplayLayerData(EVENT_ROW_ICON_BLOCKS / 2.0, 0, 0, GUI_PATH, id + "-text", 1)
+        TextDisplayLayerData text = new TextDisplayLayerData(EVENT_ROW_ICON_BLOCKS / 2.0, 0, -EVENTS_ROW_PULL_BACK_BLOCKS,
+                GUI_PATH, id + "-text", 1)
                 .setText(lines)
                 .setBackground(BUTTON_BACKGROUND);
         text.setAutoFitText(false);
@@ -1029,7 +1064,8 @@ public final class AdminGuiService implements Listener {
         // centered on the text - a text display grows upward from its anchor while an item display
         // is centered on it, hence the -height/2 (this GUI's local +y = down).
         ItemDisplayLayerData iconLayer = new ItemDisplayLayerData(
-                -textWidthBlocks / 2.0 + EVENT_ROW_ICON_PULL_IN_BLOCKS, -textHeightBlocks / 2.0, 0,
+                -textWidthBlocks / 2.0 + EVENT_ROW_ICON_PULL_IN_BLOCKS, -textHeightBlocks / 2.0,
+                -EVENTS_ROW_PULL_BACK_BLOCKS,
                 GUI_PATH, id + "-icon", 2)
                 .setItemStack(icon);
         iconLayer.setScale(new Vector3f((float) EVENT_ROW_ICON_BLOCKS, (float) EVENT_ROW_ICON_BLOCKS, (float) EVENT_ROW_ICON_BLOCKS));
@@ -1053,7 +1089,7 @@ public final class AdminGuiService implements Listener {
                 .onLeftClick(onClick)
                 .onHoverStart(onHoverStart)
                 .onHoverEnd(onHoverEnd)
-                .hitboxOffsetZ(ROTATED_TILE_HITBOX_RECESS_Z)
+                .hitboxOffsetZ(EVENTS_ROW_HITBOX_RECESS_Z)
                 .build();
     }
 
@@ -1169,7 +1205,7 @@ public final class AdminGuiService implements Listener {
      * (text + icon), plus a small gap, plus half the panel. Not yet confirmed in-game. */
     // Was 3.8 - moved closer to the list ("dej více blíže"); the stronger tilt below also narrows
     // how wide the panel looks, so it fits closer without touching the rows.
-    private static final double EVENT_PREVIEW_OFFSET_X = 3.0;
+    private static final double EVENT_PREVIEW_OFFSET_X = 2.0;
     private static final double EVENT_PREVIEW_WIDTH_BLOCKS = 2.8;
     private static final double EVENT_PREVIEW_HEIGHT_BLOCKS = 3.0;
     private static final double EVENT_PREVIEW_ITEM_BLOCKS = 0.7;
