@@ -13,6 +13,7 @@ import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.event.inventory.ClickType;
+import org.bukkit.event.inventory.DragType;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryDragEvent;
 import org.bukkit.event.inventory.InventoryMoveItemEvent;
@@ -797,7 +798,8 @@ public final class ContainerListener implements Listener {
         return strings.stream().map(UUID::fromString).toList();
     }
 
-    @EventHandler
+    // ignoreCancelled: a drag another plugin already cancelled (locked GUI) must not be applied by hand.
+    @EventHandler(ignoreCancelled = true)
     public void onDrag(InventoryDragEvent event) {
         if (!(event.getWhoClicked() instanceof Player player)) {
             return;
@@ -814,9 +816,123 @@ public final class ContainerListener implements Listener {
             event.getNewItems().forEach((rawSlot, item) ->
                     StackDebug.log("    vanilla dava slot " + rawSlot + ": " + StackDebug.describe(item)));
         }
+        if (tryDragByHand(event, player)) {
+            return; // cancelled and applied by hand next tick
+        }
         // Same reasoning as onClick: schedule a tick later so the drag is fully resolved before
         // reading it back.
         Bukkit.getScheduler().runTask(plugin, () -> reconcileDragResult(view, rawSlots, player));
+    }
+
+    /** One slot of a hand-resolved drag. {@code existing} is null for an empty slot. */
+    private record DragTarget(int rawSlot, Inventory inventory, int slot, ItemStack existing,
+                              List<UUID> existingUnits, int room) {
+    }
+
+    private record DragPlacement(DragTarget target, ItemStack stack, List<UUID> given) {
+    }
+
+    /**
+     * Vanilla's drag ("spread the cursor over several slots", left = evenly, right = one each) can
+     * only add to a slot whose item is {@code similar} to the cursor - which a tracked stack never
+     * is (unique PDC) - so it only ever filled empty slots and never stacked onto an existing
+     * stack of the same template. This resolves the drag by hand: each slot dragged over gets its
+     * share, added to whatever same-template stack is already there (up to the max stack size),
+     * with the leftover staying on the cursor - so stacks mix freely regardless of which UUIDs
+     * they carry. Cancelled and applied next tick, like the other hand-built paths. Only for a
+     * tracked cursor over plain storage slots; anything else (crafting grid, armor, a plugin's
+     * special menu) falls back to vanilla by returning false.
+     */
+    private boolean tryDragByHand(InventoryDragEvent event, Player player) {
+        ItemStack cursor = event.getOldCursor();
+        InventoryView view = event.getView();
+        InventoryType topType = view.getTopInventory().getType();
+        if (cursor == null || cursor.getType().isAir() || trackedKind(cursor) == null
+                || (topType != InventoryType.CRAFTING && !PLAIN_SHORTCUT_STORAGE.contains(topType))) {
+            return false;
+        }
+        List<UUID> pool = new ArrayList<>(consistentUnits(cursor));
+        String templateKey = tracking.readTemplateKey(cursor);
+        if (pool.isEmpty() || templateKey == null) {
+            return false;
+        }
+        int max = cursor.getMaxStackSize();
+        boolean shulker = cursor.getType().name().endsWith("SHULKER_BOX");
+
+        List<DragTarget> targets = new ArrayList<>();
+        for (int raw : new java.util.TreeSet<>(event.getRawSlots())) {
+            InventoryType.SlotType slotType = view.getSlotType(raw);
+            Inventory inventory = view.getInventory(raw);
+            if ((slotType != InventoryType.SlotType.CONTAINER && slotType != InventoryType.SlotType.QUICKBAR)
+                    || inventory == null || (shulker && inventory.getType() == InventoryType.SHULKER_BOX)) {
+                return false; // a slot with special rules is part of this drag - leave all of it to vanilla
+            }
+            int slot = view.convertSlot(raw);
+            ItemStack existing = inventory.getItem(slot);
+            if (existing == null || existing.getType().isAir()) {
+                targets.add(new DragTarget(raw, inventory, slot, null, List.of(), max));
+                continue;
+            }
+            if (existing.getType() != cursor.getType()) {
+                continue; // a different item: skipped, as vanilla does
+            }
+            List<UUID> existingUnits = consistentUnits(existing);
+            if (!existingUnits.isEmpty() && templateKey.equals(tracking.readTemplateKey(existing))
+                    && existingUnits.size() < max) {
+                targets.add(new DragTarget(raw, inventory, slot, existing, existingUnits, max - existingUnits.size()));
+            }
+        }
+        if (targets.isEmpty()) {
+            return false;
+        }
+        // Vanilla never lets a drag cover more slots than there are items on the cursor.
+        int total = pool.size();
+        if (targets.size() > total) {
+            targets = new ArrayList<>(targets.subList(0, total));
+        }
+        int perSlot = event.getType() == DragType.SINGLE ? 1 : Math.max(1, total / targets.size());
+
+        List<DragPlacement> placements = new ArrayList<>();
+        for (DragTarget target : targets) {
+            int give = Math.min(Math.min(perSlot, target.room()), pool.size());
+            if (give <= 0) {
+                continue;
+            }
+            List<UUID> given = new ArrayList<>(pool.subList(0, give));
+            pool = new ArrayList<>(pool.subList(give, pool.size()));
+            List<UUID> all = new ArrayList<>(target.existingUnits());
+            all.addAll(given);
+            ItemStack stack = (target.existing() != null ? target.existing() : cursor).clone();
+            stack.setAmount(all.size());
+            tracking.writeMergedUnits(stack, all, templateKey);
+            placements.add(new DragPlacement(target, stack, given));
+        }
+        if (placements.isEmpty()) {
+            return false;
+        }
+
+        ItemStack remainder = null;
+        if (!pool.isEmpty()) {
+            remainder = cursor.clone();
+            remainder.setAmount(pool.size());
+            tracking.writeMergedUnits(remainder, pool, templateKey);
+        }
+        event.setCancelled(true);
+        ItemStack finalRemainder = remainder;
+        String viewTitle = plainTitle(view);
+        StackDebug.log("    -> drag zpracovan rucne: " + placements.size() + " slotu, zbyva na kurzoru "
+                + (finalRemainder != null ? finalRemainder.getAmount() : 0));
+        Bukkit.getScheduler().runTask(plugin, () -> {
+            for (DragPlacement p : placements) {
+                p.target().inventory().setItem(p.target().slot(), p.stack());
+                resolveContext(p.target().inventory(), p.target().slot(), player, viewTitle).ifPresent(ctx ->
+                        tracking.recordLocationForAll(p.given(), ctx,
+                                p.target().existing() != null ? "MERGED" : "MOVED", player));
+            }
+            player.setItemOnCursor(finalRemainder);
+            player.updateInventory();
+        });
+        return true;
     }
 
     @EventHandler
