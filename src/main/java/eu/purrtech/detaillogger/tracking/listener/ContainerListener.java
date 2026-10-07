@@ -6,6 +6,7 @@ import eu.purrtech.detaillogger.tracking.StackDebug;
 import eu.purrtech.detaillogger.tracking.StackMath;
 import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 import org.bukkit.Bukkit;
+import org.bukkit.GameMode;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.entity.Entity;
@@ -816,12 +817,57 @@ public final class ContainerListener implements Listener {
             event.getNewItems().forEach((rawSlot, item) ->
                     StackDebug.log("    vanilla dava slot " + rawSlot + ": " + StackDebug.describe(item)));
         }
+        if (isCreativeCloneDrag(event, player)) {
+            // Middle-button drag in creative: vanilla puts a full copy in every slot and leaves the
+            // cursor alone. Let it happen (creative duplication is allowed by design), then give each
+            // copy fresh UUIDs - reslicing would instead strip them, and the by-hand path below would
+            // have undone the duplication.
+            StackDebug.log("    -> kreativni klonovaci drag, kopie dostanou nova UUID");
+            Bukkit.getScheduler().runTask(plugin, () -> relabelCloneDrag(view, rawSlots, player));
+            return;
+        }
         if (tryDragByHand(event, player)) {
             return; // cancelled and applied by hand next tick
         }
         // Same reasoning as onClick: schedule a tick later so the drag is fully resolved before
         // reading it back.
         Bukkit.getScheduler().runTask(plugin, () -> reconcileDragResult(view, rawSlots, player));
+    }
+
+    /**
+     * Bukkit reports a creative middle-button ("clone") drag as an ordinary EVEN drag, so it can't be
+     * told apart by type. What gives it away: it places items (newItems) yet the cursor is left
+     * exactly as it was - a real spread always uses up part of the cursor.
+     */
+    private static boolean isCreativeCloneDrag(InventoryDragEvent event, Player player) {
+        ItemStack before = event.getOldCursor();
+        ItemStack after = event.getCursor();
+        return player.getGameMode() == GameMode.CREATIVE && !event.getNewItems().isEmpty()
+                && before != null && after != null && !after.getType().isAir()
+                && after.getAmount() == before.getAmount();
+    }
+
+    /** Every clone-dragged stack is a new physical copy: mint fresh UUIDs, linked to the originals. */
+    private void relabelCloneDrag(InventoryView view, List<Integer> rawSlots, Player player) {
+        String viewTitle = plainTitle(view);
+        for (int rawSlot : rawSlots) {
+            ItemStack item = view.getItem(rawSlot);
+            Inventory inventory = view.getInventory(rawSlot);
+            if (item == null || item.getType().isAir() || inventory == null) {
+                continue;
+            }
+            List<UUID> originals = tracking.readAllUnits(item);
+            if (originals.isEmpty()) {
+                continue;
+            }
+            List<UUID> fresh = tracking.registerCreativeDuplicate(item, originals);
+            if (fresh.isEmpty()) {
+                continue;
+            }
+            view.setItem(rawSlot, item);
+            resolveContext(inventory, view.convertSlot(rawSlot), player, viewTitle).ifPresent(ctx ->
+                    tracking.recordLocationForAll(fresh, ctx, "CREATIVE_DUPLICATE", player));
+        }
     }
 
     /** One slot of a hand-resolved drag. {@code existing} is null for an empty slot. */
