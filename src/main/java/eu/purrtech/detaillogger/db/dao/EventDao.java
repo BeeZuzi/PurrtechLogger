@@ -101,8 +101,36 @@ public final class EventDao {
      * Unlike {@link #findByUnit}/{@link #findByPlayer}, {@code MOVED} is not excluded here since
      * this is meant to show literally everything the category filter allows through.
      */
-    public List<EventRecord> findFiltered(Collection<String> eventTypes, Long fromMillisInclusive,
-                                           Long toMillisInclusive, int limit) throws SQLException {
+    /** A player that has at least one event: uuid + best known name (null if never joined, i.e. not in {@code players}). */
+    public record PlayerOption(String uuid, String name) {
+    }
+
+    /**
+     * Every player with at least one event, A-Z by name - the admin GUI's player filter. Blocking
+     * read, must be called off the main thread.
+     */
+    public List<PlayerOption> findPlayersWithEvents() throws SQLException {
+        MainThreadCheck.assertAsync();
+        Connection connection = borrow();
+        try (PreparedStatement ps = connection.prepareStatement("""
+                SELECT DISTINCT e.player_uuid, p.current_name
+                FROM events e LEFT JOIN players p ON p.uuid = e.player_uuid
+                WHERE e.player_uuid IS NOT NULL
+                ORDER BY LOWER(COALESCE(p.current_name, e.player_uuid))
+                """); ResultSet rs = ps.executeQuery()) {
+            List<PlayerOption> players = new ArrayList<>();
+            while (rs.next()) {
+                players.add(new PlayerOption(rs.getString(1), rs.getString(2)));
+            }
+            return players;
+        } finally {
+            database.readPool().release(connection);
+        }
+    }
+
+    public List<EventRecord> findFiltered(Collection<String> eventTypes, Collection<String> playerUuids,
+                                           Long fromMillisInclusive, Long toMillisInclusive,
+                                           int limit) throws SQLException {
         MainThreadCheck.assertAsync();
         StringBuilder sql = new StringBuilder("""
                 SELECT id, unit_uuid, event_type, timestamp, world, x, y, z, player_uuid, detail, gamemode, nearby_players
@@ -113,6 +141,11 @@ public final class EventDao {
             String placeholders = eventTypes.stream().map(t -> "?").collect(Collectors.joining(","));
             sql.append(" AND event_type IN (").append(placeholders).append(')');
             params.addAll(eventTypes);
+        }
+        if (playerUuids != null && !playerUuids.isEmpty()) {
+            String placeholders = playerUuids.stream().map(t -> "?").collect(Collectors.joining(","));
+            sql.append(" AND player_uuid IN (").append(placeholders).append(')');
+            params.addAll(playerUuids);
         }
         if (fromMillisInclusive != null) {
             sql.append(" AND timestamp >= ?");

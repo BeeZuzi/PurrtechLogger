@@ -198,6 +198,8 @@ public final class AdminGuiService implements Listener {
         /** Checked categories. Empty = no category filter = "Vse" (so "Vse" can never be on together
          * with any other box - it simply means none of them are checked). */
         private final java.util.Set<String> activeCategories = new java.util.LinkedHashSet<>();
+        /** Checked players (UUID strings). Empty = every player. Same idea as the categories. */
+        private final java.util.Set<String> activePlayers = new java.util.LinkedHashSet<>();
         private Long from;
         private Long to;
         private boolean relativeTime = false;
@@ -883,13 +885,17 @@ public final class AdminGuiService implements Listener {
         lastPage.put(player.getUniqueId(), () -> openEventsPage(player));
         EventsFilter filter = eventsFilters.computeIfAbsent(player.getUniqueId(), id -> new EventsFilter());
         List<String> types = List.copyOf(filter.activeCategories);
+        List<String> playerUuids = List.copyOf(filter.activePlayers);
         Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
             try {
-                List<EventRecord> events = eventDao.findFiltered(types, filter.from, filter.to, EVENTS_LIST_LIMIT);
+                List<EventRecord> events = eventDao.findFiltered(types, playerUuids, filter.from, filter.to,
+                        EVENTS_LIST_LIMIT);
+                // Everyone who has any record - the options of the player filter.
+                List<EventDao.PlayerOption> players = eventDao.findPlayersWithEvents();
                 // Row icons - one batched lookup instead of one query per row.
                 Map<String, String> materials = templateDao.findMaterialsByUnits(events.stream()
                         .map(EventRecord::unitUuid).filter(java.util.Objects::nonNull).distinct().toList());
-                Bukkit.getScheduler().runTask(plugin, () -> openEventsListPage(player, filter, events, materials));
+                Bukkit.getScheduler().runTask(plugin, () -> openEventsListPage(player, filter, events, materials, players));
             } catch (SQLException e) {
                 logger.severe("Admin GUI nacteni udalosti selhalo: " + e);
                 Bukkit.getScheduler().runTask(plugin, () -> player.sendMessage("Lookup selhal, viz konzole."));
@@ -898,7 +904,7 @@ public final class AdminGuiService implements Listener {
     }
 
     private void openEventsListPage(Player player, EventsFilter filter, List<EventRecord> events,
-                                    Map<String, String> materials) {
+                                    Map<String, String> materials, List<EventDao.PlayerOption> players) {
         List<ButtonData> buttons = new ArrayList<>();
         resetEventPreview(player);
         unitPreviewCache.clear();
@@ -916,7 +922,7 @@ public final class AdminGuiService implements Listener {
         // dolu... nebo doleva" instruction.
         int columns = 2;
         double stepX = 2.0;
-        double filterCenterX = -2.5;
+        double filterCenterX = -4.0; // was -2.5: moved 1.5 left to make room for the player filter
         double startX = filterCenterX - (columns - 1) * stepX / 2.0;
         double startY = -1.3;
         double stepY = 0.4;
@@ -955,6 +961,17 @@ public final class AdminGuiService implements Listener {
         // row so it grows upward alongside the list.
         buttons.add(eventPreviewButton(player, cx(columnX + EVENT_PREVIEW_OFFSET_X), cy(bottomRowY), EVENT_PREVIEW_Z));
 
+        // Player filter: scrollable checklist of everyone with a record, in the space the category
+        // filter gave up. Same bottom row as the events list so the two line up. The header doubles as
+        // "clear" - no player checked = every player.
+        buttons.add(navButton("players-clear", cx(PLAYER_FILTER_X), cy(rowStartY - 0.35), 0.05,
+                filter.activePlayers.isEmpty() ? "Hraci: vsichni" : "Hraci: " + filter.activePlayers.size() + " (zrusit)",
+                e -> {
+                    filter.activePlayers.clear();
+                    openEventsPage(player);
+                }, filter.activePlayers.isEmpty()));
+        buttons.add(playerFilterList(player, filter, players, cx(PLAYER_FILTER_X), cy(bottomRowY), rowStepY));
+
         // Info panel sits directly under the filter column now that the date row moved out - per
         // "vlevo ty filtr tlačítka... dej jim tam více prostoru".
         List<String> infoLines = new ArrayList<>();
@@ -989,7 +1006,8 @@ public final class AdminGuiService implements Listener {
         buttons.add(navButton("back", cx(0), cy(afterDateY + 0.25), 0.05, "Hlavni menu", e -> openMainMenu(player)));
 
         String pageKey = "purrtechlog:events:" + (filter.activeCategories.isEmpty()
-                ? "all" : String.join("+", filter.activeCategories));
+                ? "all" : String.join("+", filter.activeCategories))
+                + ":" + (filter.activePlayers.isEmpty() ? "everyone" : String.join("+", filter.activePlayers));
         ScreenPageData screen = new ScreenPageData(backgroundPage(), buttons, pageKey, MENU_DISTANCE_PIXELS);
         DisplayGuiAPI.openMenu(player, screen);
     }
@@ -1141,6 +1159,16 @@ public final class AdminGuiService implements Listener {
         }
 
         double widthPixels = (EVENTS_ROW_TARGET_WIDTH_BLOCKS + EVENT_ROW_ICON_BLOCKS) * PIXELS_PER_BLOCK + HITBOX_PADDING_PX;
+        return scrollFrame(listId, x, y, z, rows, widthPixels, rowSpacingBlocks);
+    }
+
+    /**
+     * The shared part of every scroll list in this GUI: the dark frame behind the visible rows and
+     * the {@code button_list_scroll} container holding {@code rows}. {@code x,y,z} anchors the BOTTOM
+     * visible row. Used by the events list, the item history and the player filter.
+     */
+    private ButtonData scrollFrame(String listId, double x, double y, double z, List<ButtonData> rows,
+                                   double widthPixels, double rowSpacingBlocks) {
         double heightPixels = EVENTS_VISIBLE_ROWS * rowSpacingBlocks * PIXELS_PER_BLOCK;
 
         // Frame/background panel spans the whole visible column, vertically centered on it - since
@@ -1173,6 +1201,63 @@ public final class AdminGuiService implements Listener {
                 .visibleRows(EVENTS_VISIBLE_ROWS)
                 .rowSpacing(rowSpacingBlocks)
                 .build();
+    }
+
+    /** Player filter column, relative to screen center: between the category filter (moved left to -4.0)
+     * and the center buttons. Not yet confirmed in-game. */
+    private static final double PLAYER_FILTER_X = -1.9;
+    private static final double PLAYER_FILTER_WIDTH_BLOCKS = 1.5;
+
+    /**
+     * The player filter: one checkbox row per player with any record. A checked player is green. Clicking
+     * a row toggles it and reloads the page (the list scrolls back to the top). Names are shrunk, never
+     * wrapped, to {@link #PLAYER_FILTER_WIDTH_BLOCKS}.
+     */
+    private ButtonData playerFilterList(Player player, EventsFilter filter, List<EventDao.PlayerOption> players,
+                                        double x, double y, double rowSpacingBlocks) {
+        List<ButtonData> rows = new ArrayList<>();
+        // Checked players first so they stay visible, then A-Z (the DAO already sorts A-Z).
+        List<EventDao.PlayerOption> ordered = new ArrayList<>(players);
+        ordered.sort(Comparator.comparing((EventDao.PlayerOption p) -> !filter.activePlayers.contains(p.uuid())));
+        for (EventDao.PlayerOption option : ordered) {
+            boolean checked = filter.activePlayers.contains(option.uuid());
+            String name = option.name() != null ? option.name() : option.uuid().substring(0, 8);
+            TextDisplayLayerData text = new TextDisplayLayerData(0, 0, -EVENTS_ROW_PULL_BACK_BLOCKS, GUI_PATH,
+                    "player-" + option.uuid() + "-text", 1)
+                    .setText(List.of((checked ? "[x] " : "[ ] ") + name))
+                    .setBackground(checked ? BUTTON_BACKGROUND_ACTIVE : BUTTON_BACKGROUND);
+            text.setAutoFitText(false);
+            double natural = text.estimateContentWidthBlocks();
+            if (natural > PLAYER_FILTER_WIDTH_BLOCKS) {
+                float scale = (float) Math.max(COMPACT_MIN_TEXT_SCALE, PLAYER_FILTER_WIDTH_BLOCKS / natural);
+                text.setScale(new Vector3f(scale, scale, 1f));
+            }
+            double widthPixels = Math.max(HITBOX_MIN_WIDTH_PX, text.estimateContentWidthBlocks() * PIXELS_PER_BLOCK
+                    + HITBOX_PADDING_PX);
+            String uuid = option.uuid();
+            rows.add(ButtonData.builder()
+                    .at(0, 0, 0.01)
+                    .size(widthPixels, Math.max(HITBOX_HEIGHT_PX,
+                            text.estimateContentHeightBlocks() * PIXELS_PER_BLOCK + HITBOX_PADDING_PX))
+                    .layers(new LayersData(List.of(text), GUI_PATH + ":player-" + uuid, GUI_PATH))
+                    .id("player-" + uuid)
+                    .onLeftClick(e -> {
+                        if (!filter.activePlayers.remove(uuid)) {
+                            filter.activePlayers.add(uuid);
+                        }
+                        openEventsPage(player);
+                    })
+                    // Not rotated, so the whole box is one Interaction: recess by half its width and the
+                    // row's own 0.5-block push toward the player (done by the list) leaves it in front of
+                    // the list's scroll hitbox.
+                    .hitboxOffsetZ(hitboxRecessZ(widthPixels) - EVENTS_ROW_PULL_BACK_BLOCKS * PIXELS_PER_BLOCK)
+                    .build());
+        }
+        if (rows.isEmpty()) {
+            return buildStaticText("players-empty", x, y, 0.05, List.of("(zadne zaznamy)"));
+        }
+        return scrollFrame("players-list", x, y, EVENTS_LIST_Z, rows,
+                PLAYER_FILTER_WIDTH_BLOCKS * PIXELS_PER_BLOCK + HITBOX_PADDING_PX, rowSpacingBlocks);
     }
 
     /** Row text for {@link #eventRowButton}: line 1 = ID (left-most - "ID se bude ukazovat na levé
