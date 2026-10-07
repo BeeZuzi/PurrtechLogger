@@ -4,6 +4,7 @@ import eu.purrtech.detaillogger.db.dao.DupeAlertDao;
 import eu.purrtech.detaillogger.db.dao.DupeAlertRecord;
 import eu.purrtech.detaillogger.db.dao.EventDao;
 import eu.purrtech.detaillogger.db.dao.EventRecord;
+import eu.purrtech.detaillogger.db.dao.LineageDao;
 import eu.purrtech.detaillogger.db.dao.LocationDao;
 import eu.purrtech.detaillogger.db.dao.PlayerRecord;
 import eu.purrtech.detaillogger.db.dao.TemplateDao;
@@ -247,6 +248,7 @@ public final class AdminGuiService implements Listener {
     private final PlayerDirectoryService playerDirectory;
     private final EventDao eventDao;
     private final LocationDao locationDao;
+    private final LineageDao lineageDao;
     private final ItemTrackingService itemTracking;
     /** Per-player state of the events page's hover item preview - see {@link #showEventPreview}. */
     private final Map<UUID, PreviewState> previewStates = new ConcurrentHashMap<>();
@@ -268,8 +270,9 @@ public final class AdminGuiService implements Listener {
 
     public AdminGuiService(HistoryService historyService, TemplateDao templateDao, DupeAlertDao dupeAlertDao,
                             PlayerDirectoryService playerDirectory, EventDao eventDao, LocationDao locationDao,
-                            ItemTrackingService itemTracking, Plugin plugin, Logger logger) {
+                            LineageDao lineageDao, ItemTrackingService itemTracking, Plugin plugin, Logger logger) {
         this.locationDao = locationDao;
+        this.lineageDao = lineageDao;
         this.itemTracking = itemTracking;
         this.historyService = historyService;
         this.templateDao = templateDao;
@@ -362,7 +365,10 @@ public final class AdminGuiService implements Listener {
                 }
                 String material = templateDao.findMaterialById(found.get().unit().templateId());
                 UnitLocationRecord location = locationDao.findByUnit(uuidString);
-                Bukkit.getScheduler().runTask(plugin, () -> openDetailPage(player, found.get(), material, location));
+                List<LineageDao.Link> parents = lineageDao.findParents(uuidString);
+                List<LineageDao.Link> children = lineageDao.findChildren(uuidString);
+                Bukkit.getScheduler().runTask(plugin,
+                        () -> openDetailPage(player, found.get(), material, location, parents, children));
             } catch (SQLException e) {
                 logger.severe("Admin GUI detail lookup selhal: " + e);
                 Bukkit.getScheduler().runTask(plugin, () -> player.sendMessage("Lookup selhal, viz konzole."));
@@ -378,8 +384,24 @@ public final class AdminGuiService implements Listener {
     private static final String ITEM_ICON_ID = "item-icon";
     private static final double ITEM_ICON_BLOCKS = 0.8;
 
+    /** Up to 3 lines of "what this unit was made from / turned into": the other unit's short UUID, or
+     * what an untracked result became (e.g. DIAMOND_BLOCK), plus how and when. */
+    private static void addLineageLines(List<String> lines, String label, List<LineageDao.Link> links) {
+        for (int i = 0; i < links.size() && i < 3; i++) {
+            LineageDao.Link link = links.get(i);
+            String other = link.otherUuid() != null ? link.otherUuid().substring(0, 8) + "..."
+                    : link.detail() != null ? link.detail() : "?";
+            lines.add(label + ": " + other + " (" + link.relation().replace("TRANSFORMED_", "").toLowerCase(Locale.ROOT)
+                    + ", " + formatTime(link.at()) + ")");
+        }
+        if (links.size() > 3) {
+            lines.add(label + ": ... a dalsich " + (links.size() - 3));
+        }
+    }
+
     private void openDetailPage(Player player, HistoryService.UnitHistory history, String materialName,
-                                UnitLocationRecord location) {
+                                UnitLocationRecord location, List<LineageDao.Link> parents,
+                                List<LineageDao.Link> children) {
         TrackedUnitRecord unit = history.unit();
         // The real item (enchant glint, custom model, name) if its last location is loaded -
         // otherwise just its template material ("místo stonu bude ten item").
@@ -404,6 +426,8 @@ public final class AdminGuiService implements Listener {
             infoLines.add("Duplikat z: " + unit.duplicatedFromUuid());
         }
         infoLines.add("Poloha: " + formatUnitLocation(location));
+        addLineageLines(infoLines, "Vznikl z", parents);
+        addLineageLines(infoLines, "Promenen na", children);
         infoLines.add("Udalosti: " + history.events().size());
 
         // History as the same clickable scroll list as the events menu, newest first like there.

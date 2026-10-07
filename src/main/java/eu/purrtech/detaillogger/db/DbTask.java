@@ -61,6 +61,11 @@ public sealed interface DbTask {
     record InsertNameHistoryTask(String playerUuid, String name, long changedAt) implements DbTask {
     }
 
+    /** One parent -> child link in {@code unit_lineage}; child may be null (untracked result). */
+    record InsertLineageTask(String parentUuid, String childUuid, String relation, String detail,
+                              long at) implements DbTask {
+    }
+
     /** Startup safety net against "online" rows left behind by an unclean shutdown. */
     record ResetAllPlayersOfflineTask() implements DbTask {
     }

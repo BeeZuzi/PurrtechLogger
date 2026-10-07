@@ -1,6 +1,7 @@
 package eu.purrtech.detaillogger.tracking;
 
 import eu.purrtech.detaillogger.db.dao.EventDao;
+import eu.purrtech.detaillogger.db.dao.LineageDao;
 import eu.purrtech.detaillogger.db.dao.LocationDao;
 import eu.purrtech.detaillogger.db.dao.TrackedUnitDao;
 import eu.purrtech.detaillogger.template.TemplateDefinition;
@@ -29,22 +30,95 @@ public final class ItemTrackingService {
     private final TrackedUnitDao trackedUnitDao;
     private final LocationDao locationDao;
     private final EventDao eventDao;
+    private final LineageDao lineageDao;
     private final LocationRecorder locationRecorder;
     private final StackReconciler stackReconciler;
     private final Logger logger;
 
     public ItemTrackingService(TrackedItemTag itemTag, TemplateMatcher matcher, TemplateRegistry registry,
                                 TrackedUnitDao trackedUnitDao, LocationDao locationDao, EventDao eventDao,
-                                Logger logger) {
+                                LineageDao lineageDao, Logger logger) {
         this.itemTag = itemTag;
         this.matcher = matcher;
         this.registry = registry;
         this.trackedUnitDao = trackedUnitDao;
         this.locationDao = locationDao;
         this.eventDao = eventDao;
+        this.lineageDao = lineageDao;
         this.locationRecorder = new LocationRecorder(locationDao, eventDao);
         this.stackReconciler = new StackReconciler(itemTag);
         this.logger = logger;
+    }
+
+    /**
+     * Whether two stacks may share one slot: same material, same template, and identical in every
+     * way (name, lore, enchants, other plugins' data...) EXCEPT this plugin's own tracking tags.
+     * Vanilla can't stack tracked items at all, since every unit's tag differs - so every hand-built
+     * merge has to ask this instead. A renamed diamond must never merge into a plain one.
+     */
+    public boolean sameStack(ItemStack a, ItemStack b) {
+        if (a == null || b == null || a.getType() != b.getType()) {
+            return false;
+        }
+        String templateA = itemTag.readTemplateKey(a);
+        if (templateA == null || !templateA.equals(itemTag.readTemplateKey(b))) {
+            return false;
+        }
+        ItemStack strippedA = a.clone();
+        ItemStack strippedB = b.clone();
+        itemTag.strip(strippedA);
+        itemTag.strip(strippedB);
+        strippedA.setAmount(1);
+        strippedB.setAmount(1);
+        return strippedA.isSimilar(strippedB);
+    }
+
+    /** A copy with the tracking tags removed and amount 1 - the reference for {@link #sameStack}. */
+    public ItemStack stackSample(ItemStack item) {
+        ItemStack sample = item.clone();
+        sample.setAmount(1);
+        return sample;
+    }
+
+    /**
+     * An item came out of a transformation (anvil rename, enchant, grindstone, smithing...) carrying
+     * its input's tracking tag, i.e. the very same UUIDs. A modified item is a new thing: give the
+     * result fresh UUIDs (one per item, same template) and record parent -> child for every one,
+     * so each unit's profile shows what it was made from. Mutates {@code result}'s meta in place.
+     * Returns the new units (empty if the result carries no tag, or its template has no DB id yet).
+     */
+    public List<UUID> deriveUnits(ItemStack result, List<UUID> parents, String relation) {
+        String templateKey = itemTag.readTemplateKey(result);
+        Integer templateId = templateKey != null ? registry.idOf(templateKey) : null;
+        if (templateId == null || parents.isEmpty()) {
+            return List.of();
+        }
+        List<UUID> children = mintUnits(templateId, result.getAmount(), "DERIVED");
+        itemTag.writeUnits(result, children, templateKey);
+        long now = System.currentTimeMillis();
+        for (int i = 0; i < children.size(); i++) {
+            lineageDao.enqueue(parents.get(i % parents.size()).toString(), children.get(i).toString(),
+                    relation, null, now);
+        }
+        return children;
+    }
+
+    /**
+     * Units that were used up by a transformation whose result is not tracked (e.g. diamonds crafted
+     * into a block): they are gone, so mark them destroyed with the cause and link them to what they
+     * became in {@code detail}.
+     */
+    public void consumeUnits(List<UUID> units, String relation, String detail, Location where, Player actor) {
+        long now = System.currentTimeMillis();
+        for (UUID unit : units) {
+            lineageDao.enqueue(unit.toString(), null, relation, detail, now);
+        }
+        markDestroyedForAll(units, relation, where, actor);
+    }
+
+    /** Parents whose children were derived by {@link #deriveUnits}: used up, so no longer alive. */
+    public void retireUnits(List<UUID> units, String cause, Location where, Player actor) {
+        markDestroyedForAll(units, cause, where, actor);
     }
 
     public boolean isTracked(ItemStack item) {

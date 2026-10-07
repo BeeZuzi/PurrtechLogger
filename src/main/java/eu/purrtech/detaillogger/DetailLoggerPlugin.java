@@ -4,6 +4,7 @@ import eu.purrtech.detaillogger.command.PurrLogCommand;
 import eu.purrtech.detaillogger.db.Database;
 import eu.purrtech.detaillogger.db.dao.DupeAlertDao;
 import eu.purrtech.detaillogger.db.dao.EventDao;
+import eu.purrtech.detaillogger.db.dao.LineageDao;
 import eu.purrtech.detaillogger.db.dao.LocationDao;
 import eu.purrtech.detaillogger.db.dao.PlayerDao;
 import eu.purrtech.detaillogger.db.dao.TemplateDao;
@@ -26,6 +27,7 @@ import eu.purrtech.detaillogger.tracking.listener.ItemDestructionListener;
 import eu.purrtech.detaillogger.tracking.listener.ItemLifecycleListener;
 import eu.purrtech.detaillogger.tracking.listener.PlayerJoinScanListener;
 import eu.purrtech.detaillogger.tracking.listener.PlayerPresenceListener;
+import eu.purrtech.detaillogger.tracking.listener.ItemTransformListener;
 import eu.purrtech.detaillogger.tracking.listener.ShulkerNestingListener;
 import eu.purrtech.detaillogger.tracking.listener.ShulkerSessionListener;
 import eu.purrtech.detaillogger.tracking.pdc.TrackedBlockTag;
@@ -67,8 +69,9 @@ public final class DetailLoggerPlugin extends JavaPlugin {
         TrackedBlockTag blockTag = new TrackedBlockTag(this);
         TrackedEntityTag entityTag = new TrackedEntityTag(this);
         TemplateMatcher templateMatcher = new TemplateMatcher(templateRegistry);
+        LineageDao lineageDao = new LineageDao(database);
         ItemTrackingService itemTracking = new ItemTrackingService(
-                itemTag, templateMatcher, templateRegistry, trackedUnitDao, locationDao, eventDao, getLogger());
+                itemTag, templateMatcher, templateRegistry, trackedUnitDao, locationDao, eventDao, lineageDao, getLogger());
         StackDebug.init(getDataFolder(), getLogger(), itemTracking);
         BlockIdentityIndex blockIndex = new BlockIdentityIndex();
         BlockTrackingService blockTracking = new BlockTrackingService(blockTag, itemTag, templateMatcher,
@@ -90,12 +93,13 @@ public final class DetailLoggerPlugin extends JavaPlugin {
         getServer().getPluginManager().registerEvents(new ItemDestructionListener(itemTracking), this);
         getServer().getPluginManager().registerEvents(new ContainerListener(itemTracking, this), this);
         getServer().getPluginManager().registerEvents(new ShulkerNestingListener(itemTracking), this);
+        getServer().getPluginManager().registerEvents(new ItemTransformListener(itemTracking, this), this);
         getServer().getPluginManager().registerEvents(new ShulkerSessionListener(itemTracking, itemTag, eventDao), this);
         getServer().getPluginManager().registerEvents(new ChunkIndexListener(blockIndex, locationDao, this), this);
         getServer().getPluginManager().registerEvents(new BlockLifecycleListener(blockTracking, entityTag, this), this);
 
         AdminGuiService adminGuiService = setupDisplayGuiIntegration(
-                templateDao, eventDao, dupeAlertDao, historyService, playerDirectory, locationDao, itemTracking);
+                templateDao, eventDao, dupeAlertDao, historyService, playerDirectory, locationDao, lineageDao, itemTracking);
 
         var purrLogCommand = new PurrLogCommand(this, trackedUnitDao, eventDao, templateRegistry,
                 templatesFile, historyService, dupeAlertDao, sweepTask, adminGuiService, playerDirectory);
@@ -155,13 +159,14 @@ public final class DetailLoggerPlugin extends JavaPlugin {
     private AdminGuiService setupDisplayGuiIntegration(TemplateDao templateDao, EventDao eventDao,
                                                          DupeAlertDao dupeAlertDao, HistoryService historyService,
                                                          PlayerDirectoryService playerDirectory,
-                                                         LocationDao locationDao, ItemTrackingService itemTracking) {
+                                                         LocationDao locationDao, LineageDao lineageDao,
+                                                         ItemTrackingService itemTracking) {
         if (!getServer().getPluginManager().isPluginEnabled("PurrTechDisplayGUI")) {
             getLogger().info("PurrTechDisplayGUI nenalezeno - admin GUI (/purrlog gui) a [purrtechlog] akce nejsou k dispozici.");
             return null;
         }
         AdminGuiService adminGuiService = new AdminGuiService(
-                historyService, templateDao, dupeAlertDao, playerDirectory, eventDao, locationDao, itemTracking,
+                historyService, templateDao, dupeAlertDao, playerDirectory, eventDao, locationDao, lineageDao, itemTracking,
                 this, getLogger());
         getServer().getPluginManager().registerEvents(adminGuiService, this);
         MenuViewLoggingAction.register(eventDao);

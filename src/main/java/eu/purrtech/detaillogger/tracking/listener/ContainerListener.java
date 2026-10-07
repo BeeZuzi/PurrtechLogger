@@ -81,7 +81,9 @@ public final class ContainerListener implements Listener {
      * doubled to absorb network jitter between the two click packets. */
     private static final long SHIFT_DOUBLE_CLICK_WINDOW_MS = 500;
 
-    private record TrackedKind(Material type, String templateKey) {
+    /** A kind of tracked stack: {@code sample} is any one of them (amount 1) - what counts as "the
+     * same" is {@link ItemTrackingService#sameStack}, not just material + template. */
+    private record TrackedKind(ItemStack sample) {
     }
 
     /** A player's previous click - see {@link #tryShiftDoubleClick}. {@code kind} is the tracked
@@ -177,14 +179,30 @@ public final class ContainerListener implements Listener {
      * (matching vanilla's own place-one semantics for a stackable target). Returns true if it
      * handled (and cancelled) the event.
      */
+    /**
+     * Slots where a hand-built move/merge is safe: ordinary inventory/storage slots. Never a
+     * result slot (taking it must consume the inputs - only vanilla does that, and moving it by hand
+     * duplicated items out of an anvil and a crafting table), nor an input/fuel/armor/trade slot,
+     * which have their own rules.
+     */
+    private static boolean isPlainSlot(InventoryClickEvent event) {
+        InventoryType.SlotType type = event.getSlotType();
+        return type == InventoryType.SlotType.CONTAINER || type == InventoryType.SlotType.QUICKBAR;
+    }
+
+    /** Hand-built shift-click paths only run when the other side is plain storage too. */
+    private static boolean isStorageView(InventoryView view) {
+        return PLAIN_SHORTCUT_STORAGE.contains(view.getTopInventory().getType());
+    }
+
     private boolean tryMerge(InventoryClickEvent event, Player player) {
         ClickType click = event.getClick();
         if (click != ClickType.LEFT && click != ClickType.RIGHT) {
             return false; // shift-click/double-click/etc. are handled elsewhere
         }
         Inventory clicked = event.getClickedInventory();
-        if (clicked == null || event.getSlot() < 0) {
-            return false;
+        if (clicked == null || event.getSlot() < 0 || !isPlainSlot(event)) {
+            return false; // result/input/fuel/armor slots have their own rules - vanilla only
         }
         ItemStack current = event.getCurrentItem();
         ItemStack cursor = event.getCursor();
@@ -201,11 +219,12 @@ public final class ContainerListener implements Listener {
             return false; // nothing tracked on at least one side - vanilla handles it fine alone
         }
 
-        String currentTemplate = tracking.readTemplateKey(current);
-        String cursorTemplate = tracking.readTemplateKey(cursor);
-        if (currentTemplate == null || !currentTemplate.equals(cursorTemplate)) {
-            return false; // different templates shouldn't merge even if the material matches
+        // Same template AND identical name/lore/enchants/...: a renamed diamond must not merge into a
+        // plain one (they fall through to vanilla's normal swap instead).
+        if (!tracking.sameStack(current, cursor)) {
+            return false;
         }
+        String currentTemplate = tracking.readTemplateKey(current);
 
         int transferLimit = click == ClickType.LEFT ? cursorUnits.size() : 1;
         StackMath.MergeResult sliced = StackMath.mergeUnits(
@@ -261,8 +280,9 @@ public final class ContainerListener implements Listener {
             return false;
         }
         Inventory clicked = event.getClickedInventory();
-        if (clicked == null) {
-            return false;
+        if (clicked == null || !isPlainSlot(event)
+                || (clicked.getType() != InventoryType.PLAYER && !PLAIN_SHORTCUT_STORAGE.contains(clicked.getType()))) {
+            return false; // crafting grids, furnaces, anvils... gather by vanilla's own rules
         }
 
         ItemStack[] contents = clicked.getContents();
@@ -281,8 +301,8 @@ public final class ContainerListener implements Listener {
                 continue;
             }
             List<UUID> units = consistentUnits(item);
-            if (units.isEmpty() || !templateKey.equals(tracking.readTemplateKey(item))) {
-                StackDebug.log("        slot " + slot + " preskocen (jiny template / bez UUID): " + StackDebug.describe(item));
+            if (units.isEmpty() || !tracking.sameStack(cursor, item)) {
+                StackDebug.log("        slot " + slot + " preskocen (jiny item / bez UUID): " + StackDebug.describe(item));
                 continue;
             }
             int take = Math.min(max - gathered.size(), units.size());
@@ -303,7 +323,7 @@ public final class ContainerListener implements Listener {
         // Step 2: the cursor is full but fragments are left - glue those into as few stacks as
         // possible ("pokud bude plny tak zase at to jde do noveho stacku") instead of leaving them
         // scattered like vanilla's gather does.
-        boolean compacted = compactTemplate(clicked, contents, limit, cursor.getType(), templateKey, player,
+        boolean compacted = compactTemplate(clicked, contents, limit, cursor, templateKey, player,
                 plainTitle(event.getView()));
         changed |= compacted;
 
@@ -333,8 +353,9 @@ public final class ContainerListener implements Listener {
      * touches slots that already held that template, so nothing else moves. Records MERGED for the
      * stacks that changed. Returns false (untouched) if the layout was already compact.
      */
-    private boolean compactTemplate(Inventory inventory, ItemStack[] contents, int limit, Material type,
+    private boolean compactTemplate(Inventory inventory, ItemStack[] contents, int limit, ItemStack sample,
                                     String templateKey, Player player, String viewTitle) {
+        Material type = sample.getType();
         List<Integer> slots = new ArrayList<>();
         List<UUID> pool = new ArrayList<>();
         for (int slot = 0; slot < limit; slot++) {
@@ -343,8 +364,8 @@ public final class ContainerListener implements Listener {
                 continue;
             }
             List<UUID> units = consistentUnits(item);
-            if (units.isEmpty() || !templateKey.equals(tracking.readTemplateKey(item))) {
-                continue;
+            if (units.isEmpty() || !tracking.sameStack(sample, item)) {
+                continue; // a differently named/enchanted stack of the same template stays on its own
             }
             slots.add(slot);
             pool.addAll(units);
@@ -402,14 +423,18 @@ public final class ContainerListener implements Listener {
         }
         Inventory source = event.getClickedInventory();
         int sourceSlot = event.getSlot();
-        if (source == null || sourceSlot < 0) {
+        InventoryView view = event.getView();
+        // Only between plain storage and the player's inventory. In an anvil/crafting table/furnace
+        // /smithing table... the clicked slot may be a RESULT (moving it by hand skipped consuming the
+        // inputs - confirmed duplication in a real debug.log) and the destination slots have rules
+        // (input/fuel/result), so vanilla's own quick-move must do it.
+        if (source == null || sourceSlot < 0 || !isPlainSlot(event) || !isStorageView(view)) {
             return false;
         }
         ItemStack moving = event.getCurrentItem();
         if (moving == null || moving.getType().isAir()) {
             return false;
         }
-        InventoryView view = event.getView();
         Inventory destination = source.equals(view.getTopInventory()) ? view.getBottomInventory() : view.getTopInventory();
         if (!quickMoveStack(source, sourceSlot, destination, player, plainTitle(view))) {
             return false; // untracked, or no room anywhere - vanilla handles/ignores it the same way
@@ -436,6 +461,7 @@ public final class ContainerListener implements Listener {
         }
         Inventory source = event.getClickedInventory();
         if (source == null || previous == null || previous.slot() != event.getSlot()
+                || !isPlainSlot(event) || !isStorageView(event.getView())
                 || !source.equals(previous.inventory())
                 || System.currentTimeMillis() - previous.at() > SHIFT_DOUBLE_CLICK_WINDOW_MS) {
             return false;
@@ -454,7 +480,7 @@ public final class ContainerListener implements Listener {
         ItemStack[] sourceContents = movableContents(source);
         boolean movedAny = false;
         for (int slot = 0; slot < sourceContents.length; slot++) {
-            if (kind.equals(trackedKind(sourceContents[slot]))) {
+            if (sourceContents[slot] != null && tracking.sameStack(kind.sample(), sourceContents[slot])) {
                 movedAny |= quickMoveStack(source, slot, destination, player, viewTitle);
             }
         }
@@ -473,7 +499,7 @@ public final class ContainerListener implements Listener {
             return null;
         }
         String templateKey = tracking.readTemplateKey(item);
-        return templateKey != null ? new TrackedKind(item.getType(), templateKey) : null;
+        return templateKey != null ? new TrackedKind(tracking.stackSample(item)) : null;
     }
 
     /**
@@ -509,7 +535,7 @@ public final class ContainerListener implements Listener {
                 continue;
             }
             List<UUID> existingUnits = consistentUnits(existing);
-            if (existingUnits.isEmpty() || !templateKey.equals(tracking.readTemplateKey(existing))) {
+            if (existingUnits.isEmpty() || !tracking.sameStack(moving, existing)) {
                 continue;
             }
             StackMath.MergeResult sliced = StackMath.mergeUnits(
@@ -731,80 +757,6 @@ public final class ContainerListener implements Listener {
         return (Player) event.getWhoClicked();
     }
 
-    /**
-     * Sweeps every slot of the given inventory and merges any tracked stacks that share a
-     * template and have room, front-to-back. Only called after a drag now (see {@link #onDrag}) -
-     * shift-click and direct-click merging are handled by hand ({@link #tryShiftClick},
-     * {@link #tryMerge}, {@link #tryGatherOntoCursor}) precisely because a blanket sweep like this
-     * one can't distinguish "vanilla scattered this, re-merge it" from "the player deliberately put
-     * these in separate slots" - it used to run after every click for exactly that reason and that
-     * caused a real bug (see {@link #tryShiftClick}'s Javadoc). A drag is still a single gesture
-     * spread across several vanilla-picked slots in one go rather than several independent player
-     * choices, so sweeping it afterward remains safe. Idempotent (a second call on an
-     * already-consolidated inventory is a no-op) - a single greedy left-to-right pass may leave a
-     * little fragmentation in rare cases (e.g. three-way splits), which the very next sweep mops up.
-     */
-    private void consolidate(Inventory inventory, Player actor, String viewTitle) {
-        ItemStack[] contents = inventory.getContents();
-        Map<String, Integer> mergeTargetBySlotKey = new HashMap<>();
-        boolean changed = false;
-
-        for (int slot = 0; slot < contents.length; slot++) {
-            ItemStack item = contents[slot];
-            if (item == null || item.getType().isAir()) {
-                continue;
-            }
-            List<UUID> units = consistentUnits(item);
-            if (units.isEmpty()) {
-                continue;
-            }
-            String templateKey = tracking.readTemplateKey(item);
-            if (templateKey == null) {
-                continue;
-            }
-            String groupKey = item.getType().name() + ":" + templateKey;
-            Integer targetSlot = mergeTargetBySlotKey.get(groupKey);
-            if (targetSlot == null) {
-                mergeTargetBySlotKey.put(groupKey, slot);
-                continue;
-            }
-
-            ItemStack target = contents[targetSlot];
-            List<UUID> targetUnits = consistentUnits(target);
-            StackMath.MergeResult sliced = StackMath.mergeUnits(
-                    toStrings(targetUnits), toStrings(units), target.getMaxStackSize(), units.size());
-            if (sliced.destination().size() == targetUnits.size()) {
-                // target's already full - this stack becomes the new merge point for anything after it
-                mergeTargetBySlotKey.put(groupKey, slot);
-                continue;
-            }
-
-            List<UUID> newTargetUnits = toUuids(sliced.destination());
-            ItemStack mergedTarget = target.clone();
-            mergedTarget.setAmount(newTargetUnits.size());
-            tracking.writeMergedUnits(mergedTarget, newTargetUnits, templateKey);
-            contents[targetSlot] = mergedTarget;
-
-            List<UUID> remaining = toUuids(sliced.source());
-            if (remaining.isEmpty()) {
-                contents[slot] = null;
-            } else {
-                ItemStack remainder = item.clone();
-                remainder.setAmount(remaining.size());
-                tracking.writeMergedUnits(remainder, remaining, templateKey);
-                contents[slot] = remainder;
-            }
-
-            resolveContext(inventory, targetSlot, actor, viewTitle)
-                    .ifPresent(ctx -> tracking.recordLocationForAll(newTargetUnits, ctx, "MERGED", actor));
-            changed = true;
-        }
-
-        if (changed) {
-            inventory.setContents(contents);
-        }
-    }
-
     private static List<String> toStrings(List<UUID> uuids) {
         return uuids.stream().map(UUID::toString).toList();
     }
@@ -955,7 +907,7 @@ public final class ContainerListener implements Listener {
                 continue; // a different item: skipped, as vanilla does
             }
             List<UUID> existingUnits = consistentUnits(existing);
-            if (!existingUnits.isEmpty() && templateKey.equals(tracking.readTemplateKey(existing))
+            if (!existingUnits.isEmpty() && tracking.sameStack(cursor, existing)
                     && existingUnits.size() < max) {
                 targets.add(new DragTarget(raw, inventory, slot, existing, existingUnits, max - existingUnits.size()));
             }

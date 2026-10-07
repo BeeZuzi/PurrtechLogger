@@ -81,6 +81,20 @@ public final class StackDebug {
         }
         List<UUID> units = tracking != null ? tracking.readAllUnits(item) : List.of();
         StringBuilder sb = new StringBuilder(item.getType().name()).append(" x").append(item.getAmount());
+        // What makes two stacks "different" (and so not mergeable): name, lore, enchants.
+        org.bukkit.inventory.meta.ItemMeta meta = item.getItemMeta();
+        if (meta != null) {
+            if (meta.hasDisplayName() && meta.displayName() != null) {
+                sb.append(" name=\"").append(net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer
+                        .plainText().serialize(meta.displayName())).append('"');
+            }
+            if (meta.hasLore()) {
+                sb.append(" lore");
+            }
+            if (!item.getEnchantments().isEmpty()) {
+                sb.append(" ench=").append(item.getEnchantments().size());
+            }
+        }
         if (units.isEmpty()) {
             return sb.append(" UNTRACKED").toString();
         }

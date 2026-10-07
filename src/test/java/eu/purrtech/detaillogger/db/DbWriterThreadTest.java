@@ -28,6 +28,32 @@ class DbWriterThreadTest {
     }
 
     @Test
+    void lineageIsWrittenEvenWhenTheUnitsAreNotInTheDatabase() throws Exception {
+        Logger logger = Logger.getAnonymousLogger();
+        try (Connection c = DriverManager.getConnection("jdbc:sqlite::memory:")) {
+            try (Statement s = c.createStatement()) {
+                s.execute("PRAGMA foreign_keys=ON");
+            }
+            new SchemaMigrator(c, logger).migrate(); // includes V4__unit_lineage.sql
+
+            WriteQueue queue = new WriteQueue(1000, logger);
+            queue.offer(new DbTask.InsertLineageTask("parent-1", "child-1", "TRANSFORMED_ANVIL", null, 5));
+            // an untracked result: child is NULL, detail says what it became
+            queue.offer(new DbTask.InsertLineageTask("parent-2", null, "TRANSFORMED_WORKBENCH", "DIAMOND_BLOCK", 6));
+
+            DbWriterThread writer = new DbWriterThread(c, queue, logger);
+            writer.start();
+            writer.shutdown();
+
+            assertEquals(2, count(c, "unit_lineage"));
+            try (Statement s = c.createStatement();
+                 ResultSet r = s.executeQuery("select detail from unit_lineage where child_uuid is null")) {
+                assertEquals("DIAMOND_BLOCK", r.getString(1));
+            }
+        }
+    }
+
+    @Test
     void badForeignKeyRowIsSkippedAndTheRestOfTheBatchIsWritten() throws Exception {
         Logger logger = Logger.getAnonymousLogger();
         try (Connection c = DriverManager.getConnection("jdbc:sqlite::memory:")) {
