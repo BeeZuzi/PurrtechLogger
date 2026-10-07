@@ -58,6 +58,23 @@ class WriteQueueTest {
     }
 
     @Test
+    void statsCountPeakDroppedAndWritten() {
+        WriteQueue queue = new WriteQueue(10, Logger.getAnonymousLogger());
+        queue.configure(10, java.util.Map.of("SEEN", WritePriority.HIGHEST));
+        for (int i = 0; i < 15; i++) {
+            queue.offer(event()); // 10 accepted, 5 dropped
+        }
+        queue.drain(100);
+        queue.recordFlush(10, 20_000_000L); // 10 tasks in 20 ms
+        WriteQueue.Stats stats = queue.stats();
+        assertEquals(10, stats.peakPending());
+        assertEquals(5, stats.droppedTotal());
+        assertEquals(10, stats.writtenTotal());
+        assertEquals(20, stats.lastBatchMillis());
+        assertEquals(0, stats.pending());
+    }
+
+    @Test
     void keepsEnqueueOrder() throws InterruptedException {
         WriteQueue queue = new WriteQueue(10, Logger.getAnonymousLogger());
         DbTask u = unit(1);

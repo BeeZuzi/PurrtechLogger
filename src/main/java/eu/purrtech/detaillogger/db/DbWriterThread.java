@@ -62,6 +62,7 @@ final class DbWriterThread extends Thread {
      * batch is now retried task by task, so only the offending task is dropped (and logged by name).
      */
     private void flush(List<DbTask> batch, boolean retryIndividually) {
+        long startedNanos = System.nanoTime();
         try {
             connection.setAutoCommit(false);
             try (PreparedStatement events = connection.prepareStatement("""
@@ -224,6 +225,7 @@ final class DbWriterThread extends Thread {
                 if (resetAllOfflineRequested) resetAllOffline.executeUpdate();
 
                 connection.commit();
+                queue.recordFlush(batch.size(), System.nanoTime() - startedNanos);
             } catch (SQLException e) {
                 connection.rollback();
                 throw e;

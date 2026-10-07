@@ -6,6 +6,7 @@ import eu.purrtech.detaillogger.db.dao.DupeAlertRecord;
 import eu.purrtech.detaillogger.db.dao.EventDao;
 import eu.purrtech.detaillogger.db.dao.EventRecord;
 import eu.purrtech.detaillogger.db.dao.PlayerRecord;
+import eu.purrtech.detaillogger.db.WriteQueue;
 import eu.purrtech.detaillogger.db.dao.TrackedUnitDao;
 import eu.purrtech.detaillogger.db.dao.TrackedUnitRecord;
 import eu.purrtech.detaillogger.gui.AdminGuiService;
@@ -127,7 +128,24 @@ public final class PurrLogCommand implements BasicCommand {
         sendHelp(sender);
     }
 
-    /** {@code /purrlog debug on|off|dump|clear} - see {@link StackDebug}. */
+    /** {@code /purrlog debug stats}: is the DB write queue the bottleneck, or the disk? */
+    private void sendQueueStats(CommandSender sender) {
+        WriteQueue.Stats s = plugin.writeQueueStats();
+        double seconds = Math.max(1, s.uptimeMillis() / 1000.0);
+        double busySeconds = Math.max(0.001, s.writeMillisTotal() / 1000.0);
+        sender.sendMessage("=== Fronta zapisu do DB ===");
+        sender.sendMessage("Ceka ted: " + s.pending() + " (z toho udalosti/polohy " + s.bulkPending() + " z "
+                + s.bulkCapacity() + " = " + (100L * s.bulkPending() / Math.max(1, s.bulkCapacity())) + " %)");
+        sender.sendMessage("Nejvic naraz od startu: " + s.peakPending());
+        sender.sendMessage("Zahozeno od startu: " + s.droppedTotal());
+        sender.sendMessage("Zapsano od startu: " + s.writtenTotal() + " (prumer "
+                + Math.round(s.writtenTotal() / seconds) + "/s behem celeho provozu)");
+        sender.sendMessage("Rychlost samotneho zapisu: " + Math.round(s.writtenTotal() / busySeconds)
+                + "/s (kdyz zapisovac pracuje) - posledni davka " + s.lastBatchTasks() + " za " + s.lastBatchMillis() + " ms");
+        sender.sendMessage("Zapisovac pracoval " + Math.round(100 * busySeconds / seconds) + " % casu.");
+    }
+
+    /** {@code /purrlog debug on|off|dump|stats|clear} - see {@link StackDebug}. */
     private void runDebug(CommandSender sender, String[] args) {
         String sub = args.length >= 2 ? args[1].toLowerCase() : "";
         switch (sub) {
@@ -151,17 +169,18 @@ public final class PurrLogCommand implements BasicCommand {
                 StackDebug.setEnabled(was);
                 sender.sendMessage("Obsah otevreneho inventare zapsan do debug.log.");
             }
+            case "stats" -> sendQueueStats(sender);
             case "clear" -> {
                 boolean cleared = StackDebug.file().delete() || !StackDebug.file().exists();
                 sender.sendMessage(cleared ? "debug.log smazan." : "debug.log se nepodarilo smazat.");
             }
             default -> sender.sendMessage("Debug je " + (StackDebug.isEnabled() ? "ZAPNUTY" : "vypnuty")
-                    + ". /purrlog debug on|off|dump|clear");
+                    + ". /purrlog debug on|off|dump|stats|clear");
         }
     }
 
     private void sendHelp(CommandSender sender) {
-        sender.sendMessage("/purrlog debug on|off|dump|clear - trace klikani/dragu do debug.log");
+        sender.sendMessage("/purrlog debug on|off|dump|clear - trace klikani/dragu do debug.log; /purrlog debug stats - stav fronty zapisu do DB");
         sender.sendMessage("=== PurrTechDetailLogger ===");
         sender.sendMessage("/purrlog gui - otevri admin GUI (vyzaduje DisplayGUI)");
         sender.sendMessage("/purrlog history <uuid> - historie sledovane jednotky");

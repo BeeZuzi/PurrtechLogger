@@ -32,6 +32,34 @@ public final class WriteQueue {
     private final LinkedBlockingQueue<DbTask> queue = new LinkedBlockingQueue<>();
     private final AtomicInteger bulkPending = new AtomicInteger();
     private final AtomicLong droppedSinceLog = new AtomicLong();
+    // Counters for /purrlog debug stats - since server start.
+    private final AtomicLong droppedTotal = new AtomicLong();
+    private final AtomicLong writtenTotal = new AtomicLong();
+    private final AtomicLong writeNanosTotal = new AtomicLong();
+    private volatile int peakPending;
+    private volatile int lastBatchTasks;
+    private volatile long lastBatchMillis;
+    private final long startedAt = System.currentTimeMillis();
+
+    /** Snapshot for {@code /purrlog debug stats}. */
+    public record Stats(int pending, int bulkPending, int bulkCapacity, int peakPending, long droppedTotal,
+                        long writtenTotal, long writeMillisTotal, int lastBatchTasks, long lastBatchMillis,
+                        long uptimeMillis) {
+    }
+
+    public Stats stats() {
+        return new Stats(queue.size(), bulkPending.get(), bulkCapacity, peakPending, droppedTotal.get(),
+                writtenTotal.get(), writeNanosTotal.get() / 1_000_000, lastBatchTasks, lastBatchMillis,
+                System.currentTimeMillis() - startedAt);
+    }
+
+    /** Called by the writer after each committed batch. */
+    void recordFlush(int tasks, long nanos) {
+        writtenTotal.addAndGet(tasks);
+        writeNanosTotal.addAndGet(nanos);
+        lastBatchTasks = tasks;
+        lastBatchMillis = nanos / 1_000_000;
+    }
     private volatile long lastDropLogAt;
     private volatile int bulkCapacity;
     /** Event type -> priority (config.yml {@code event-priority}); a type not listed is MEDIUM. */
@@ -76,11 +104,16 @@ public final class WriteQueue {
             if (bulkPending.incrementAndGet() > priority.limit(bulkCapacity)) {
                 bulkPending.decrementAndGet();
                 droppedSinceLog.incrementAndGet();
+                droppedTotal.incrementAndGet();
                 logDrops();
                 return;
             }
         }
         queue.add(task);
+        int size = queue.size();
+        if (size > peakPending) {
+            peakPending = size; // racy by design: a stat, an off-by-a-few is fine
+        }
     }
 
     private void logDrops() {

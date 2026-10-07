@@ -114,6 +114,10 @@ public final class DetailLoggerPlugin extends JavaPlugin {
         Bukkit.getScheduler().runTaskTimer(this, sweepTask::runSweep, 20L * 30, 20L * 30);
     }
 
+    public eu.purrtech.detaillogger.db.WriteQueue.Stats writeQueueStats() {
+        return database.writeQueue().stats();
+    }
+
     /** Reads {@code max-pending-writes} and {@code event-priority} from config.yml into the DB
      * write queue. Called on enable and again by {@code /purrlog reload}. */
     public void applyWriteQueueConfig() {
