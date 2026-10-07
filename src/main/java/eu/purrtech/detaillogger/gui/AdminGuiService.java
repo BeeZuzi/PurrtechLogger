@@ -110,6 +110,9 @@ public final class AdminGuiService implements Listener {
      * general guidance, NOT yet confirmed in-game - if it turns the wrong way, flip the sign via
      * the in-editor "Rotace" tool or here. */
     private static final float EVENTS_LIST_ROTATION_Y_DEGREES = -28f; // was -12, "ještě nakloň o trošku"
+    /** The filter column on the LEFT: the same angle as the events list on the right, the opposite way,
+     * so the two halves face each other symmetrically ("stejnou velikostí úhlu... opačným směrem"). */
+    private static final float EVENTS_FILTER_ROTATION_Y_DEGREES = -EVENTS_LIST_ROTATION_Y_DEGREES;
     /** Depth of the whole events list (blocks, + = toward the player) - was a hardcoded 0.05. */
     private static final double EVENTS_LIST_Z = 0.75;
 
@@ -200,8 +203,8 @@ public final class AdminGuiService implements Listener {
         private final java.util.Set<String> activeCategories = new java.util.LinkedHashSet<>();
         /** Checked players (UUID strings). Empty = every player. Same idea as the categories. */
         private final java.util.Set<String> activePlayers = new java.util.LinkedHashSet<>();
-        /** Whether the player picker (list of everyone with a record) is currently shown. */
-        private boolean playerPickerOpen;
+        /** Scroll position of the player picker, kept across the reloads a click causes. */
+        private int pickerOffset;
         private Long from;
         private Long to;
         private boolean relativeTime = false;
@@ -652,7 +655,7 @@ public final class AdminGuiService implements Listener {
                                   Consumer<MenuButtonClickEvent> onClick, boolean active) {
         // Interaction hitbox is auto-sized to the label's own rendered size (see buildTextButton)
         // instead of a hand-picked flat default - matches "design size" per the user's request.
-        return buildTextButton(id, x, y, z, label, onClick, active, false);
+        return buildTextButton(id, x, y, z, label, onClick, active, false, 0f);
     }
 
     private ButtonData compactButton(String id, double x, double y, double z, String label,
@@ -661,7 +664,13 @@ public final class AdminGuiService implements Listener {
         // ends up roughly the same visual width regardless of label length - see
         // [[reference-purrtechdisplaygui-coordinate-rules]] for why the events-category grid needed
         // this (long labels at full scale vastly exceeded the grid's column step and stuck together).
-        return buildTextButton(id, x, y, z, label, onClick, active, true);
+        return buildTextButton(id, x, y, z, label, onClick, active, true, 0f);
+    }
+
+    /** Same, turned around the Y axis (the left filter column faces the player). */
+    private ButtonData compactButton(String id, double x, double y, double z, String label,
+                                      Consumer<MenuButtonClickEvent> onClick, boolean active, float rotationY) {
+        return buildTextButton(id, x, y, z, label, onClick, active, true, rotationY);
     }
 
     /**
@@ -673,7 +682,8 @@ public final class AdminGuiService implements Listener {
      * padding keeps edge clicks registering; a floor keeps 1-2 character labels ("Vse") clickable.
      */
     private ButtonData buildTextButton(String id, double x, double y, double z, String label,
-                                        Consumer<MenuButtonClickEvent> onClick, boolean active, boolean compact) {
+                                        Consumer<MenuButtonClickEvent> onClick, boolean active, boolean compact,
+                                        float rotationY) {
         TextDisplayLayerData text = new TextDisplayLayerData(0, 0, 0, GUI_PATH, id + "-text", 1)
                 .setText(List.of(label))
                 .setBackground(active ? BUTTON_BACKGROUND_ACTIVE : BUTTON_BACKGROUND);
@@ -689,6 +699,9 @@ public final class AdminGuiService implements Listener {
                 text.setScale(new Vector3f(scale, scale, 1f));
             }
         }
+        if (rotationY != 0f) {
+            text.setRotationY(rotationY); // own statement: returns the base type, see eventRowButton
+        }
         double widthPixels = Math.max(HITBOX_MIN_WIDTH_PX,
                 text.estimateContentWidthBlocks() * PIXELS_PER_BLOCK + HITBOX_PADDING_PX);
         double heightPixels = HITBOX_HEIGHT_PX;
@@ -699,7 +712,9 @@ public final class AdminGuiService implements Listener {
                 .layers(design)
                 .id(id)
                 .onLeftClick(onClick)
-                .hitboxOffsetZ(hitboxRecessZ(widthPixels))
+                // A rotated button's hitbox is tiled along the tilted face (0.5-block tiles), so it is
+                // recessed by half a tile; an unrotated one is a single box recessed by half its width.
+                .hitboxOffsetZ(rotationY != 0f ? ROTATED_TILE_HITBOX_RECESS_Z : hitboxRecessZ(widthPixels))
                 .build();
     }
 
@@ -752,16 +767,23 @@ public final class AdminGuiService implements Listener {
     }
 
     private ButtonData infoTextButton(double x, double y, double z, List<String> lines) {
+        return infoTextButton(x, y, z, lines, 0f);
+    }
+
+    private ButtonData infoTextButton(double x, double y, double z, List<String> lines, float rotationY) {
         TextDisplayLayerData text = new TextDisplayLayerData(0, 0, 0, GUI_PATH, "info-text", 1)
                 .setText(lines)
                 .setBackground(PANEL_BACKGROUND);
+        if (rotationY != 0f) {
+            text.setRotationY(rotationY);
+        }
         LayersData design = new LayersData(List.of(text), GUI_PATH + ":info", GUI_PATH);
         return ButtonData.builder()
                 .at(x, y, z)
                 .size(30, 10)
                 .layers(design)
                 .id("info")
-                .hitboxOffsetZ(hitboxRecessZ(30))
+                .hitboxOffsetZ(rotationY != 0f ? ROTATED_TILE_HITBOX_RECESS_Z : hitboxRecessZ(30))
                 .build();
     }
 
@@ -892,12 +914,10 @@ public final class AdminGuiService implements Listener {
             try {
                 List<EventRecord> events = eventDao.findFiltered(types, playerUuids, filter.from, filter.to,
                         EVENTS_LIST_LIMIT);
-                // Everyone who has any record - the options of the player filter.
-                List<EventDao.PlayerOption> players = eventDao.findPlayersWithEvents();
                 // Row icons - one batched lookup instead of one query per row.
                 Map<String, String> materials = templateDao.findMaterialsByUnits(events.stream()
                         .map(EventRecord::unitUuid).filter(java.util.Objects::nonNull).distinct().toList());
-                Bukkit.getScheduler().runTask(plugin, () -> openEventsListPage(player, filter, events, materials, players));
+                Bukkit.getScheduler().runTask(plugin, () -> openEventsListPage(player, filter, events, materials));
             } catch (SQLException e) {
                 logger.severe("Admin GUI nacteni udalosti selhalo: " + e);
                 Bukkit.getScheduler().runTask(plugin, () -> player.sendMessage("Lookup selhal, viz konzole."));
@@ -906,7 +926,7 @@ public final class AdminGuiService implements Listener {
     }
 
     private void openEventsListPage(Player player, EventsFilter filter, List<EventRecord> events,
-                                    Map<String, String> materials, List<EventDao.PlayerOption> players) {
+                                    Map<String, String> materials) {
         List<ButtonData> buttons = new ArrayList<>();
         resetEventPreview(player);
         unitPreviewCache.clear();
@@ -936,7 +956,8 @@ public final class AdminGuiService implements Listener {
             lastRowY = Math.max(lastRowY, y);
             boolean active = type.equals("ALL") ? filter.activeCategories.isEmpty() : filter.activeCategories.contains(type);
             String label = type.equals("ALL") ? "Vse" : CATEGORY_LABELS.getOrDefault(type, type);
-            buttons.add(compactButton("cat-" + type, cx(x), cy(y), 0.05, label, e -> toggleCategory(player, type), active));
+            buttons.add(compactButton("cat-" + type, cx(x), cy(y), 0.05, label, e -> toggleCategory(player, type), active,
+                    EVENTS_FILTER_ROTATION_Y_DEGREES));
         }
 
         // Events list - "Použij na ty události button_list_scroll": one real clickable ButtonData
@@ -963,34 +984,22 @@ public final class AdminGuiService implements Listener {
         // row so it grows upward alongside the list.
         buttons.add(eventPreviewButton(player, cx(columnX + EVENT_PREVIEW_OFFSET_X), cy(bottomRowY), EVENT_PREVIEW_Z));
 
-        // Player filter: scrollable checklist of everyone with a record, in the space the category
-        // filter gave up. Same bottom row as the events list so the two line up. The header doubles as
-        // "clear" - no player checked = every player.
-        // The player filter is a button above the time button; it opens/closes the picker.
+        // Player filter: a button above the time button that opens a separate menu listing everyone with a
+        // record (see openPlayerPicker). Lit green while any player is checked.
         buttons.add(navButton("players-toggle", cx(0), cy(-0.25), 0.05,
-                filter.playerPickerOpen ? "Hraci: hotovo"
-                        : filter.activePlayers.isEmpty() ? "Hraci: vsichni" : "Hraci: " + filter.activePlayers.size(),
+                filter.activePlayers.isEmpty() ? "Hraci: vsichni" : "Hraci: " + filter.activePlayers.size(),
                 e -> {
-                    filter.playerPickerOpen = !filter.playerPickerOpen;
-                    openEventsPage(player);
+                    filter.pickerOffset = 0;
+                    openPlayerPicker(player);
                 }, !filter.activePlayers.isEmpty()));
-        if (filter.playerPickerOpen) {
-            // Picker: everyone with a record, any number can be checked; "Vsichni" unchecks them all.
-            buttons.add(navButton("players-clear", cx(PLAYER_FILTER_X), cy(rowStartY - 0.35), 0.05,
-                    "Vsichni hraci", e -> {
-                        filter.activePlayers.clear();
-                        openEventsPage(player);
-                    }, filter.activePlayers.isEmpty()));
-            buttons.add(playerFilterList(player, filter, players, cx(PLAYER_FILTER_X), cy(bottomRowY), rowStepY));
-        }
-
         // Info panel sits directly under the filter column now that the date row moved out - per
         // "vlevo ty filtr tlačítka... dej jim tam více prostoru".
         List<String> infoLines = new ArrayList<>();
         infoLines.add("Kategorie: " + describeCategories(filter));
         infoLines.add("Zaznamu: " + events.size() + (events.size() >= EVENTS_LIST_LIMIT ? "+" : ""));
         // +0.6 (was +0.4): moved down 0.2 - it covered the Shulker button, the 13th filter box.
-        buttons.add(infoTextButton(cx(filterCenterX), cy(lastRowY + 0.6), 0.04, infoLines));
+        buttons.add(infoTextButton(cx(filterCenterX), cy(lastRowY + 0.6), 0.04, infoLines,
+                EVENTS_FILTER_ROTATION_Y_DEGREES));
 
         // Time-display-mode toggle ("určí si hráč ve filtru") + date range, stacked vertically in
         // the center column - opens the small in-game calendar instead of a chat prompt.
@@ -1179,9 +1188,16 @@ public final class AdminGuiService implements Listener {
      * the {@code button_list_scroll} container holding {@code rows}. {@code x,y,z} anchors the BOTTOM
      * visible row. Used by the events list, the item history and the player filter.
      */
-    private ButtonData scrollFrame(String listId, double x, double y, double z, List<ButtonData> rows,
-                                   double widthPixels, double rowSpacingBlocks) {
-        double heightPixels = EVENTS_VISIBLE_ROWS * rowSpacingBlocks * PIXELS_PER_BLOCK;
+    private ButtonListScrollButtonData scrollFrame(String listId, double x, double y, double z,
+                                                  List<ButtonData> rows, double widthPixels,
+                                                  double rowSpacingBlocks) {
+        return scrollFrame(listId, x, y, z, rows, widthPixels, rowSpacingBlocks, EVENTS_VISIBLE_ROWS);
+    }
+
+    private ButtonListScrollButtonData scrollFrame(String listId, double x, double y, double z,
+                                                  List<ButtonData> rows, double widthPixels,
+                                                  double rowSpacingBlocks, int visibleRows) {
+        double heightPixels = visibleRows * rowSpacingBlocks * PIXELS_PER_BLOCK;
 
         // Frame/background panel spans the whole visible column, vertically centered on it - since
         // this button's own x,y anchors the BOTTOM row (see javadoc above), the frame sits
@@ -1191,7 +1207,7 @@ public final class AdminGuiService implements Listener {
         // TextDisplayLayerData's normal auto-fit-to-text sizing - same technique as the real
         // DisplayGUI source's own list-frame example (Internal.commands.TestCommand, "playerlist").
         TextDisplayLayerData frame = new TextDisplayLayerData(
-                0, -(EVENTS_VISIBLE_ROWS * rowSpacingBlocks) / 2.0, 0, GUI_PATH, listId + "-frame", 0)
+                0, -(visibleRows * rowSpacingBlocks) / 2.0, 0, GUI_PATH, listId + "-frame", 0)
                 .setText(List.of(" "))
                 .setBackground(PANEL_BACKGROUND);
         frame.setAutoFitText(false);
@@ -1210,48 +1226,57 @@ public final class AdminGuiService implements Listener {
                 .layers(frameLayers)
                 .id(listId)
                 .items(rows)
-                .visibleRows(EVENTS_VISIBLE_ROWS)
+                .visibleRows(visibleRows)
                 .rowSpacing(rowSpacingBlocks)
                 .build();
     }
 
-    /** Player filter column, relative to screen center: between the category filter (moved left to -4.0)
-     * and the center buttons. Not yet confirmed in-game. */
-    private static final double PLAYER_FILTER_X = -1.9;
-    private static final double PLAYER_FILTER_WIDTH_BLOCKS = 1.5;
-    /** Turned toward the player so rows are easier to hit. The list is LEFT of center, so the sign is
-     * the opposite of the events list (-28 on the right); smaller because it is closer to center.
-     * A first guess, not confirmed in-game. */
-    private static final float PLAYER_FILTER_ROTATION_Y_DEGREES = 16f;
+    // === Player picker: its own menu (opened from the "Hraci" button on the events page) listing everyone
+    // with a record, any number of whom can be checked. ===
 
-    /**
-     * The player filter: one checkbox row per player with any record. A checked player is green. Clicking
-     * a row toggles it and reloads the page (the list scrolls back to the top). Names are shrunk, never
-     * wrapped, to {@link #PLAYER_FILTER_WIDTH_BLOCKS}.
-     */
-    private ButtonData playerFilterList(Player player, EventsFilter filter, List<EventDao.PlayerOption> players,
-                                        double x, double y, double rowSpacingBlocks) {
+    private static final int PICKER_VISIBLE_ROWS = 6;
+    private static final double PICKER_ROW_STEP = 0.45;
+    private static final double PICKER_WIDTH_BLOCKS = 2.6;
+    private static final double PICKER_TOP_Y = -1.3;
+
+    public void openPlayerPicker(Player player) {
+        EventsFilter filter = eventsFilters.computeIfAbsent(player.getUniqueId(), id -> new EventsFilter());
+        lastPage.put(player.getUniqueId(), () -> openPlayerPicker(player));
+        Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+            try {
+                List<EventDao.PlayerOption> players = eventDao.findPlayersWithEvents();
+                Bukkit.getScheduler().runTask(plugin, () -> openPlayerPickerPage(player, filter, players));
+            } catch (SQLException e) {
+                logger.severe("Admin GUI nacteni hracu selhalo: " + e);
+                Bukkit.getScheduler().runTask(plugin, () -> player.sendMessage("Lookup selhal, viz konzole."));
+            }
+        });
+    }
+
+    private void openPlayerPickerPage(Player player, EventsFilter filter, List<EventDao.PlayerOption> players) {
+        List<ButtonData> buttons = new ArrayList<>();
+        // Rows can't see the list they are in (it is built after them), and the list's scroll position
+        // lives on its data object - so a click reads it from here, to reopen at the same spot.
+        java.util.concurrent.atomic.AtomicReference<ButtonListScrollButtonData> listRef =
+                new java.util.concurrent.atomic.AtomicReference<>();
+
         List<ButtonData> rows = new ArrayList<>();
-        // Checked players first so they stay visible, then A-Z (the DAO already sorts A-Z).
-        List<EventDao.PlayerOption> ordered = new ArrayList<>(players);
-        ordered.sort(Comparator.comparing((EventDao.PlayerOption p) -> !filter.activePlayers.contains(p.uuid())));
-        for (EventDao.PlayerOption option : ordered) {
-            boolean checked = filter.activePlayers.contains(option.uuid());
-            String name = option.name() != null ? option.name() : option.uuid().substring(0, 8);
+        for (EventDao.PlayerOption option : players) {
+            String uuid = option.uuid();
+            boolean checked = filter.activePlayers.contains(uuid);
+            String name = option.name() != null ? option.name() : uuid.substring(0, 8);
             TextDisplayLayerData text = new TextDisplayLayerData(0, 0, -EVENTS_ROW_PULL_BACK_BLOCKS, GUI_PATH,
-                    "player-" + option.uuid() + "-text", 1)
+                    "player-" + uuid + "-text", 1)
                     .setText(List.of((checked ? "[x] " : "[ ] ") + name))
                     .setBackground(checked ? BUTTON_BACKGROUND_ACTIVE : BUTTON_BACKGROUND);
             text.setAutoFitText(false);
             double natural = text.estimateContentWidthBlocks();
-            if (natural > PLAYER_FILTER_WIDTH_BLOCKS) {
-                float scale = (float) Math.max(COMPACT_MIN_TEXT_SCALE, PLAYER_FILTER_WIDTH_BLOCKS / natural);
+            if (natural > PICKER_WIDTH_BLOCKS) {
+                float scale = (float) Math.max(COMPACT_MIN_TEXT_SCALE, PICKER_WIDTH_BLOCKS / natural);
                 text.setScale(new Vector3f(scale, scale, 1f));
             }
-            text.setRotationY(PLAYER_FILTER_ROTATION_Y_DEGREES);
-            double widthPixels = Math.max(HITBOX_MIN_WIDTH_PX, text.estimateContentWidthBlocks() * PIXELS_PER_BLOCK
-                    + HITBOX_PADDING_PX);
-            String uuid = option.uuid();
+            double widthPixels = Math.max(HITBOX_MIN_WIDTH_PX,
+                    text.estimateContentWidthBlocks() * PIXELS_PER_BLOCK + HITBOX_PADDING_PX);
             rows.add(ButtonData.builder()
                     .at(0, 0, 0.01)
                     .size(widthPixels, Math.max(HITBOX_HEIGHT_PX,
@@ -1262,19 +1287,44 @@ public final class AdminGuiService implements Listener {
                         if (!filter.activePlayers.remove(uuid)) {
                             filter.activePlayers.add(uuid);
                         }
-                        openEventsPage(player);
+                        ButtonListScrollButtonData list = listRef.get();
+                        filter.pickerOffset = list != null ? list.getCurrentOffset() : 0;
+                        openPlayerPicker(player);
                     })
-                    // Rotated, so DisplayGUI tiles the hitbox along the tilted face (0.5-block tiles):
-                    // same recess as the events rows, which keeps it on the visual and in front of the
-                    // list's own scroll hitbox.
-                    .hitboxOffsetZ(EVENTS_ROW_HITBOX_RECESS_Z)
+                    // Not rotated (the menu is centered): one Interaction, recessed by half its width
+                    // and by the same pull-back as the visual, so it stays on the text and in front of
+                    // the list's own scroll hitbox.
+                    .hitboxOffsetZ(hitboxRecessZ(widthPixels) - EVENTS_ROW_PULL_BACK_BLOCKS * PIXELS_PER_BLOCK)
                     .build());
         }
+
+        double bottomRowY = PICKER_TOP_Y + (PICKER_VISIBLE_ROWS - 1) * PICKER_ROW_STEP;
         if (rows.isEmpty()) {
-            return buildStaticText("players-empty", x, y, 0.05, List.of("(zadne zaznamy)"));
+            buttons.add(buildStaticText("players-empty", cx(0), cy(0), 0.05, List.of("(zadne zaznamy o hracich)")));
+        } else {
+            ButtonListScrollButtonData list = scrollFrame("players-list", cx(0), cy(bottomRowY), EVENTS_LIST_Z, rows,
+                    (PICKER_WIDTH_BLOCKS + 0.2) * PIXELS_PER_BLOCK, PICKER_ROW_STEP, PICKER_VISIBLE_ROWS);
+            list.setCurrentOffset(filter.pickerOffset); // clamped to the list's range by DisplayGUI
+            listRef.set(list);
+            buttons.add(list);
         }
-        return scrollFrame("players-list", x, y, EVENTS_LIST_Z, rows,
-                PLAYER_FILTER_WIDTH_BLOCKS * PIXELS_PER_BLOCK + HITBOX_PADDING_PX, rowSpacingBlocks);
+
+        List<String> infoLines = List.of("Vyber hrace - klikni na vice hracu",
+                filter.activePlayers.isEmpty() ? "Vybrano: nikdo (= vsichni)" : "Vybrano: " + filter.activePlayers.size());
+        buttons.add(buildStaticText("players-info", cx(0), cy(PICKER_TOP_Y - 0.45), 0.05, infoLines));
+        buttons.add(navButton("players-clear", cx(-1.3), cy(bottomRowY + 0.55), 0.05, "Vsichni hraci", e -> {
+            filter.activePlayers.clear();
+            filter.pickerOffset = 0;
+            openPlayerPicker(player);
+        }, filter.activePlayers.isEmpty()));
+        buttons.add(navButton("players-done", cx(1.3), cy(bottomRowY + 0.55), 0.05, "Hotovo", e -> {
+            filter.pickerOffset = 0;
+            openEventsPage(player);
+        }));
+
+        ScreenPageData screen = new ScreenPageData(backgroundPage(), buttons,
+                "purrtechlog:players:" + String.join("+", filter.activePlayers), MENU_DISTANCE_PIXELS);
+        DisplayGuiAPI.openMenu(player, screen);
     }
 
     /** Row text for {@link #eventRowButton}: line 1 = ID (left-most - "ID se bude ukazovat na levé
