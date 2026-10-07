@@ -200,6 +200,8 @@ public final class AdminGuiService implements Listener {
         private final java.util.Set<String> activeCategories = new java.util.LinkedHashSet<>();
         /** Checked players (UUID strings). Empty = every player. Same idea as the categories. */
         private final java.util.Set<String> activePlayers = new java.util.LinkedHashSet<>();
+        /** Whether the player picker (list of everyone with a record) is currently shown. */
+        private boolean playerPickerOpen;
         private Long from;
         private Long to;
         private boolean relativeTime = false;
@@ -964,13 +966,23 @@ public final class AdminGuiService implements Listener {
         // Player filter: scrollable checklist of everyone with a record, in the space the category
         // filter gave up. Same bottom row as the events list so the two line up. The header doubles as
         // "clear" - no player checked = every player.
-        buttons.add(navButton("players-clear", cx(PLAYER_FILTER_X), cy(rowStartY - 0.35), 0.05,
-                filter.activePlayers.isEmpty() ? "Hraci: vsichni" : "Hraci: " + filter.activePlayers.size() + " (zrusit)",
+        // The player filter is a button above the time button; it opens/closes the picker.
+        buttons.add(navButton("players-toggle", cx(0), cy(-0.25), 0.05,
+                filter.playerPickerOpen ? "Hraci: hotovo"
+                        : filter.activePlayers.isEmpty() ? "Hraci: vsichni" : "Hraci: " + filter.activePlayers.size(),
                 e -> {
-                    filter.activePlayers.clear();
+                    filter.playerPickerOpen = !filter.playerPickerOpen;
                     openEventsPage(player);
-                }, filter.activePlayers.isEmpty()));
-        buttons.add(playerFilterList(player, filter, players, cx(PLAYER_FILTER_X), cy(bottomRowY), rowStepY));
+                }, !filter.activePlayers.isEmpty()));
+        if (filter.playerPickerOpen) {
+            // Picker: everyone with a record, any number can be checked; "Vsichni" unchecks them all.
+            buttons.add(navButton("players-clear", cx(PLAYER_FILTER_X), cy(rowStartY - 0.35), 0.05,
+                    "Vsichni hraci", e -> {
+                        filter.activePlayers.clear();
+                        openEventsPage(player);
+                    }, filter.activePlayers.isEmpty()));
+            buttons.add(playerFilterList(player, filter, players, cx(PLAYER_FILTER_X), cy(bottomRowY), rowStepY));
+        }
 
         // Info panel sits directly under the filter column now that the date row moved out - per
         // "vlevo ty filtr tlačítka... dej jim tam více prostoru".
@@ -1207,6 +1219,10 @@ public final class AdminGuiService implements Listener {
      * and the center buttons. Not yet confirmed in-game. */
     private static final double PLAYER_FILTER_X = -1.9;
     private static final double PLAYER_FILTER_WIDTH_BLOCKS = 1.5;
+    /** Turned toward the player so rows are easier to hit. The list is LEFT of center, so the sign is
+     * the opposite of the events list (-28 on the right); smaller because it is closer to center.
+     * A first guess, not confirmed in-game. */
+    private static final float PLAYER_FILTER_ROTATION_Y_DEGREES = 16f;
 
     /**
      * The player filter: one checkbox row per player with any record. A checked player is green. Clicking
@@ -1232,6 +1248,7 @@ public final class AdminGuiService implements Listener {
                 float scale = (float) Math.max(COMPACT_MIN_TEXT_SCALE, PLAYER_FILTER_WIDTH_BLOCKS / natural);
                 text.setScale(new Vector3f(scale, scale, 1f));
             }
+            text.setRotationY(PLAYER_FILTER_ROTATION_Y_DEGREES);
             double widthPixels = Math.max(HITBOX_MIN_WIDTH_PX, text.estimateContentWidthBlocks() * PIXELS_PER_BLOCK
                     + HITBOX_PADDING_PX);
             String uuid = option.uuid();
@@ -1247,10 +1264,10 @@ public final class AdminGuiService implements Listener {
                         }
                         openEventsPage(player);
                     })
-                    // Not rotated, so the whole box is one Interaction: recess by half its width and the
-                    // row's own 0.5-block push toward the player (done by the list) leaves it in front of
-                    // the list's scroll hitbox.
-                    .hitboxOffsetZ(hitboxRecessZ(widthPixels) - EVENTS_ROW_PULL_BACK_BLOCKS * PIXELS_PER_BLOCK)
+                    // Rotated, so DisplayGUI tiles the hitbox along the tilted face (0.5-block tiles):
+                    // same recess as the events rows, which keeps it on the visual and in front of the
+                    // list's own scroll hitbox.
+                    .hitboxOffsetZ(EVENTS_ROW_HITBOX_RECESS_Z)
                     .build());
         }
         if (rows.isEmpty()) {
