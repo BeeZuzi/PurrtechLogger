@@ -110,14 +110,43 @@ public final class ReconciliationSweepTask {
             UUID uuid = entry.getKey();
             List<Sighting> occurrences = entry.getValue();
             Boolean alive = aliveByUuid.get(uuid.toString());
+            if (alive == null) {
+                recoverIfStillMissing(uuid, occurrences.get(0), now);
+            } else {
+                missingLastSweep.remove(uuid.toString());
+            }
 
             if (occurrences.size() > 1) {
                 handleDuplicate(uuid, occurrences, now);
             } else if (Boolean.FALSE.equals(alive)) {
                 raiseAlert(uuid, occurrences.get(0), 1, 0, now, "RESURRECTED_DESTROYED_UNIT");
             }
-            // exactly one sighting + DB says alive (or unit unknown to DB, which shouldn't
-            // happen for anything genuinely tagged by this plugin) - nothing to do.
+            // exactly one sighting + DB says alive - nothing to do.
+        }
+        missingLastSweep.retainAll(byUuid.keySet().stream().map(UUID::toString).collect(Collectors.toSet()));
+    }
+
+    /** UUIDs the DB did not know in the previous sweep - see {@link #recoverIfStillMissing}. */
+    private final java.util.Set<String> missingLastSweep = new java.util.HashSet<>();
+
+    /**
+     * Fallback for a tracked item whose unit row never reached the database (the write was dropped
+     * - queue overflow or a rolled-back batch in older versions - while the UUID stayed on the item).
+     * Every later location/event write for it then fails with a foreign-key error. Re-creates the row
+     * from the item's own template, origin RECOVERED and genesis = now (the real history is gone).
+     * Only after the unit is missing in TWO sweeps in a row: a unit minted a moment ago may simply
+     * not have been flushed yet when this sweep's query ran.
+     */
+    private void recoverIfStillMissing(UUID uuid, Sighting sighting, long now) {
+        String key = uuid.toString();
+        if (!missingLastSweep.add(key)) {
+            String templateKey = tracking.readTemplateKey(sighting.item());
+            Integer templateId = templateKey != null ? registry.idOf(templateKey) : null;
+            if (templateId != null) {
+                trackedUnitDao.enqueueUpsert(key, templateId, "ITEM", "RECOVERED", null, now, true, null, null);
+                logger.info("Obnovena chybejici jednotka " + key + " (" + templateKey + ")");
+            }
+            missingLastSweep.remove(key);
         }
     }
 
