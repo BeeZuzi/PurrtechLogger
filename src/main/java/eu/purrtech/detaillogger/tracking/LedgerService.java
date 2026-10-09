@@ -111,7 +111,8 @@ public final class LedgerService {
     private String explain(UUID player, int tick) {
         Stamp stamp = stamps.get(player);
         Set<String> causes = stamp != null && stamp.tick() == tick ? stamp.causes() : Set.of();
-        for (String cause : List.of("CRAFT", "PICKUP", "DROP", "CLOSE", "CLICK", "SWAP", "INTERACT")) {
+        // CREATIVE first: a creative-menu click is also a plain click, but it is the one that matters.
+        for (String cause : List.of("CREATIVE", "CRAFT", "PICKUP", "DROP", "CLOSE", "CLICK", "SWAP", "INTERACT")) {
             if (causes.contains(cause)) {
                 return cause;
             }

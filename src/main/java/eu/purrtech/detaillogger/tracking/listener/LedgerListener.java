@@ -66,6 +66,16 @@ public final class LedgerListener implements Listener {
         ledger.watchTransaction(player, event.getView(), involved);
     }
 
+    /**
+     * Taking an item out of the creative menu (or middle-click picking one) creates it from nothing.
+     * Booked with its own cause, CREATIVE - it is neither an alert nor an ordinary click. (This event
+     * is also an InventoryClickEvent, so {@link #onClick} marks CLICK for it as well.)
+     */
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void onCreativeClick(org.bukkit.event.inventory.InventoryCreativeEvent event) {
+        ledger.mark(event.getWhoClicked().getUniqueId(), "CREATIVE");
+    }
+
     @EventHandler(priority = EventPriority.MONITOR)
     public void onDrag(InventoryDragEvent event) {
         if (event.getWhoClicked() instanceof Player player) {
