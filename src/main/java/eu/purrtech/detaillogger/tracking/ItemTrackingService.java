@@ -121,6 +121,17 @@ public final class ItemTrackingService {
         markDestroyedForAll(units, cause, where, actor);
     }
 
+    /** Cheap pre-check: is there any item template for this material at all? Lets hot paths (every
+     * inventory slot change) skip the expensive item-meta match for everything else. */
+    public boolean mayBeTemplate(org.bukkit.Material type) {
+        for (TemplateDefinition definition : registry.definitions()) {
+            if (definition.trackItems() && definition.material() == type) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     public boolean isTracked(ItemStack item) {
         return itemTag.isTracked(item);
     }

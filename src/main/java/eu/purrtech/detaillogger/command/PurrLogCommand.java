@@ -13,6 +13,7 @@ import eu.purrtech.detaillogger.gui.AdminGuiService;
 import eu.purrtech.detaillogger.template.TemplateRegistry;
 import eu.purrtech.detaillogger.tracking.HistoryService;
 import eu.purrtech.detaillogger.tracking.StackDebug;
+import eu.purrtech.detaillogger.tracking.listener.InventoryTagListener;
 import eu.purrtech.detaillogger.tracking.PlayerDirectoryService;
 import eu.purrtech.detaillogger.tracking.ReconciliationSweepTask;
 import eu.purrtech.detaillogger.util.EventLineFormatter;
@@ -58,11 +59,14 @@ public final class PurrLogCommand implements BasicCommand {
     private final ReconciliationSweepTask sweepTask;
     private final AdminGuiService adminGuiService;
     private final PlayerDirectoryService playerDirectory;
+    private final InventoryTagListener inventoryTagger;
 
     public PurrLogCommand(DetailLoggerPlugin plugin, TrackedUnitDao trackedUnitDao, EventDao eventDao,
                            TemplateRegistry templateRegistry, File templatesFile, HistoryService historyService,
                            DupeAlertDao dupeAlertDao, ReconciliationSweepTask sweepTask,
-                           AdminGuiService adminGuiService, PlayerDirectoryService playerDirectory) {
+                           AdminGuiService adminGuiService, PlayerDirectoryService playerDirectory,
+                           InventoryTagListener inventoryTagger) {
+        this.inventoryTagger = inventoryTagger;
         this.plugin = plugin;
         this.trackedUnitDao = trackedUnitDao;
         this.eventDao = eventDao;
@@ -100,6 +104,10 @@ public final class PurrLogCommand implements BasicCommand {
             runAlerts(sender);
             return;
         }
+        if (args.length == 2 && args[0].equalsIgnoreCase("mint")) {
+            runMint(sender, args[1]);
+            return;
+        }
         if (args.length == 1 && args[0].equalsIgnoreCase("sweep")) {
             sweepTask.runSweep();
             sender.sendMessage("Reconciliation sweep spusten.");
@@ -126,6 +134,22 @@ public final class PurrLogCommand implements BasicCommand {
             return;
         }
         sendHelp(sender);
+    }
+
+    /**
+     * {@code /purrlog mint <hrac>}: tag every untagged template item in a player's inventory right now.
+     * Items are normally tagged on their own the moment they appear (see {@link InventoryTagListener}),
+     * so this is for scripts that want a guaranteed point ("give, then mint") and for inventories that
+     * already hold untagged items. Callable from the console, e.g. as a crate's after-give command.
+     */
+    private void runMint(CommandSender sender, String playerName) {
+        org.bukkit.entity.Player target = Bukkit.getPlayerExact(playerName);
+        if (target == null) {
+            sender.sendMessage("Hrac '" + playerName + "' neni online.");
+            return;
+        }
+        int created = inventoryTagger.tagInventory(target);
+        sender.sendMessage(target.getName() + ": oznaceno " + created + " ks (nove jednotky).");
     }
 
     /** {@code /purrlog debug stats}: is the DB write queue the bottleneck, or the disk? */
@@ -188,6 +212,7 @@ public final class PurrLogCommand implements BasicCommand {
         sender.sendMessage("/purrlog players - seznam vsech hracu, co se kdy pripojili");
         sender.sendMessage("/purrlog player <nick|uuid> - profil a UUID konkretniho hrace");
         sender.sendMessage("/purrlog sweep - rucne spusti reconciliation sweep");
+        sender.sendMessage("/purrlog mint <hrac> - oznaci vsechny neoznacene sablonove itemy v jeho inventari");
         sender.sendMessage("/purrlog reload - znovu nacte templates.yml");
         sender.sendMessage("/purrlog template import <klic> - vytvori sablonu z drzeneho itemu");
         sender.sendMessage("/purrlog dbtest - overi DB potrubi zapisem/ctenim testovaciho zaznamu");

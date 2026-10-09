@@ -27,6 +27,7 @@ import eu.purrtech.detaillogger.tracking.listener.ItemDestructionListener;
 import eu.purrtech.detaillogger.tracking.listener.ItemLifecycleListener;
 import eu.purrtech.detaillogger.tracking.listener.PlayerJoinScanListener;
 import eu.purrtech.detaillogger.tracking.listener.PlayerPresenceListener;
+import eu.purrtech.detaillogger.tracking.listener.InventoryTagListener;
 import eu.purrtech.detaillogger.tracking.listener.ItemTransformListener;
 import eu.purrtech.detaillogger.tracking.listener.ShulkerNestingListener;
 import eu.purrtech.detaillogger.tracking.listener.ShulkerSessionListener;
@@ -94,6 +95,8 @@ public final class DetailLoggerPlugin extends JavaPlugin {
         getServer().getPluginManager().registerEvents(new ContainerListener(itemTracking, this), this);
         getServer().getPluginManager().registerEvents(new ShulkerNestingListener(itemTracking), this);
         getServer().getPluginManager().registerEvents(new ItemTransformListener(itemTracking, this), this);
+        InventoryTagListener inventoryTagger = new InventoryTagListener(itemTracking, this);
+        getServer().getPluginManager().registerEvents(inventoryTagger, this);
         getServer().getPluginManager().registerEvents(new ShulkerSessionListener(itemTracking, itemTag, eventDao), this);
         getServer().getPluginManager().registerEvents(new ChunkIndexListener(blockIndex, locationDao, this), this);
         getServer().getPluginManager().registerEvents(new BlockLifecycleListener(blockTracking, entityTag, this), this);
@@ -102,7 +105,8 @@ public final class DetailLoggerPlugin extends JavaPlugin {
                 templateDao, eventDao, dupeAlertDao, historyService, playerDirectory, locationDao, lineageDao, itemTracking);
 
         var purrLogCommand = new PurrLogCommand(this, trackedUnitDao, eventDao, templateRegistry,
-                templatesFile, historyService, dupeAlertDao, sweepTask, adminGuiService, playerDirectory);
+                templatesFile, historyService, dupeAlertDao, sweepTask, adminGuiService, playerDirectory,
+                inventoryTagger);
         registerCommand("purrlog", "PurrTechDetailLogger admin/debug command", purrLogCommand);
 
         Bukkit.getScheduler().runTaskAsynchronously(this, () -> {

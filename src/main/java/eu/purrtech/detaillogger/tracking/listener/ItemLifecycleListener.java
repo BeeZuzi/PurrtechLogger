@@ -79,7 +79,7 @@ public final class ItemLifecycleListener implements Listener {
         }
         entity.setItemStack(item);
 
-        List<UUID> remaining = mergeIntoExistingStacks(player, item, units);
+        List<UUID> remaining = mergeIntoExistingStacks(tracking, player, item, units, -1);
         if (remaining.isEmpty()) {
             // Handled entirely by hand: vanilla can't do this part itself (see the method doc),
             // so we take over placement and removal instead of letting the event resolve normally.
@@ -112,7 +112,8 @@ public final class ItemLifecycleListener implements Listener {
      * {@code ContainerListener#tryMerge}/{@code #consolidate}. Returns whatever units couldn't be
      * absorbed anywhere (empty if the whole pickup was merged away).
      */
-    private List<UUID> mergeIntoExistingStacks(Player player, ItemStack picked, List<UUID> pickedUnits) {
+    static List<UUID> mergeIntoExistingStacks(ItemTrackingService tracking, Player player, ItemStack picked,
+                                              List<UUID> pickedUnits, int skipSlot) {
         String templateKey = tracking.readTemplateKey(picked);
         if (templateKey == null) {
             return pickedUnits;
@@ -122,6 +123,9 @@ public final class ItemLifecycleListener implements Listener {
 
         for (int slot = 0; slot < storage.length && !remaining.isEmpty(); slot++) {
             ItemStack existing = storage[slot];
+            if (slot == skipSlot) {
+                continue; // the stack being merged away is itself in the inventory (slot-change tagging)
+            }
             if (existing == null || existing.getType() != picked.getType()) {
                 continue;
             }
