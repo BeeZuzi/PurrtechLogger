@@ -66,6 +66,11 @@ public sealed interface DbTask {
                               long at) implements DbTask {
     }
 
+    /** One booked change of a player count of a ledger item - see V5__ledger.sql. */
+    record InsertLedgerTask(long at, String playerUuid, String templateKey, int delta, String cause,
+                             Integer totalAfter, String detail) implements DbTask {
+    }
+
     /** Startup safety net against "online" rows left behind by an unclean shutdown. */
     record ResetAllPlayersOfflineTask() implements DbTask {
     }

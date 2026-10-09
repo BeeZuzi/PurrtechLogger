@@ -125,11 +125,29 @@ public final class ItemTrackingService {
      * inventory slot change) skip the expensive item-meta match for everything else. */
     public boolean mayBeTemplate(org.bukkit.Material type) {
         for (TemplateDefinition definition : registry.definitions()) {
-            if (definition.trackItems() && definition.material() == type) {
+            if (definition.trackItems() && !definition.ledger() && definition.material() == type) {
                 return true;
             }
         }
         return false;
+    }
+
+    /** Same cheap pre-check for {@code mode: ledger} templates. */
+    public boolean mayBeLedger(org.bukkit.Material type) {
+        for (TemplateDefinition definition : registry.definitions()) {
+            if (definition.trackItems() && definition.ledger() && definition.material() == type) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** The ledger template this stack belongs to, if any. */
+    public Optional<TemplateDefinition> ledgerTemplate(ItemStack item) {
+        if (item == null || item.getType().isAir() || !mayBeLedger(item.getType())) {
+            return Optional.empty();
+        }
+        return matcher.match(item).filter(TemplateDefinition::ledger);
     }
 
     public boolean isTracked(ItemStack item) {
@@ -236,6 +254,9 @@ public final class ItemTrackingService {
         }
 
         TemplateDefinition def = match.get();
+        if (def.ledger()) {
+            return Optional.empty(); // counted by LedgerService, never tagged - it must stack like vanilla
+        }
         Integer templateId = registry.idOf(def.key());
         if (templateId == null) {
             logger.warning("Sablona '" + def.key() + "' jeste nema potvrzene id v DB, genesis odlozena do dalsi observace");

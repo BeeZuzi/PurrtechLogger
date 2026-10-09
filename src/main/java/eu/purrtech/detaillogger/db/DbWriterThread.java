@@ -143,6 +143,10 @@ final class DbWriterThread extends Thread {
                             INSERT INTO unit_lineage(parent_uuid, child_uuid, relation, detail, at)
                             VALUES (?, ?, ?, ?, ?)
                             """);
+                 PreparedStatement ledger = connection.prepareStatement("""
+                            INSERT INTO ledger(at, player_uuid, template_key, delta, cause, total_after, detail)
+                            VALUES (?, ?, ?, ?, ?, ?, ?)
+                            """);
                  PreparedStatement resetAllOffline = connection.prepareStatement("""
                             UPDATE players SET online = 0 WHERE online = 1
                             """)) {
@@ -158,6 +162,7 @@ final class DbWriterThread extends Thread {
                 int setPlayerOfflineCount = 0;
                 int insertNameHistoryCount = 0;
                 int lineageCount = 0;
+                int ledgerCount = 0;
                 boolean resetAllOfflineRequested = false;
                 java.util.Map<String, DbTask.UpsertLocationTask> latestLocation = new java.util.LinkedHashMap<>();
 
@@ -221,6 +226,17 @@ final class DbWriterThread extends Thread {
                             queueOrRun(lineage, lenient, task);
                             lineageCount++;
                         }
+                        case DbTask.InsertLedgerTask t -> {
+                            ledger.setLong(1, t.at());
+                            ledger.setString(2, t.playerUuid());
+                            ledger.setString(3, t.templateKey());
+                            ledger.setInt(4, t.delta());
+                            ledger.setString(5, t.cause());
+                            setNullableInt(ledger, 6, t.totalAfter());
+                            ledger.setString(7, t.detail());
+                            queueOrRun(ledger, lenient, task);
+                            ledgerCount++;
+                        }
                         case DbTask.InsertNameHistoryTask t -> {
                             insertNameHistory.setString(1, t.playerUuid());
                             insertNameHistory.setString(2, t.name());
@@ -253,6 +269,7 @@ final class DbWriterThread extends Thread {
                 if (setPlayerOfflineCount > 0) setPlayerOffline.executeBatch();
                 if (insertNameHistoryCount > 0) insertNameHistory.executeBatch();
                 if (lineageCount > 0) lineage.executeBatch();
+                if (ledgerCount > 0) ledger.executeBatch();
                 if (resetAllOfflineRequested) resetAllOffline.executeUpdate();
 
                 connection.commit();

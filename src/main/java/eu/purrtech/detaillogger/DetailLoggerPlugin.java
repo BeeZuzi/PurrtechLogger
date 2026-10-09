@@ -4,6 +4,7 @@ import eu.purrtech.detaillogger.command.PurrLogCommand;
 import eu.purrtech.detaillogger.db.Database;
 import eu.purrtech.detaillogger.db.dao.DupeAlertDao;
 import eu.purrtech.detaillogger.db.dao.EventDao;
+import eu.purrtech.detaillogger.db.dao.LedgerDao;
 import eu.purrtech.detaillogger.db.dao.LineageDao;
 import eu.purrtech.detaillogger.db.dao.LocationDao;
 import eu.purrtech.detaillogger.db.dao.PlayerDao;
@@ -27,7 +28,9 @@ import eu.purrtech.detaillogger.tracking.listener.ItemDestructionListener;
 import eu.purrtech.detaillogger.tracking.listener.ItemLifecycleListener;
 import eu.purrtech.detaillogger.tracking.listener.PlayerJoinScanListener;
 import eu.purrtech.detaillogger.tracking.listener.PlayerPresenceListener;
+import eu.purrtech.detaillogger.tracking.LedgerService;
 import eu.purrtech.detaillogger.tracking.listener.InventoryTagListener;
+import eu.purrtech.detaillogger.tracking.listener.LedgerListener;
 import eu.purrtech.detaillogger.tracking.listener.ItemTransformListener;
 import eu.purrtech.detaillogger.tracking.listener.ShulkerNestingListener;
 import eu.purrtech.detaillogger.tracking.listener.ShulkerSessionListener;
@@ -95,6 +98,9 @@ public final class DetailLoggerPlugin extends JavaPlugin {
         getServer().getPluginManager().registerEvents(new ContainerListener(itemTracking, this), this);
         getServer().getPluginManager().registerEvents(new ShulkerNestingListener(itemTracking), this);
         getServer().getPluginManager().registerEvents(new ItemTransformListener(itemTracking, this), this);
+        LedgerService ledgerService = new LedgerService(itemTracking, templateRegistry, new LedgerDao(database),
+                dupeAlertDao, this);
+        getServer().getPluginManager().registerEvents(new LedgerListener(ledgerService, this), this);
         InventoryTagListener inventoryTagger = new InventoryTagListener(itemTracking, this);
         getServer().getPluginManager().registerEvents(inventoryTagger, this);
         getServer().getPluginManager().registerEvents(new ShulkerSessionListener(itemTracking, itemTag, eventDao), this);
@@ -106,7 +112,7 @@ public final class DetailLoggerPlugin extends JavaPlugin {
 
         var purrLogCommand = new PurrLogCommand(this, trackedUnitDao, eventDao, templateRegistry,
                 templatesFile, historyService, dupeAlertDao, sweepTask, adminGuiService, playerDirectory,
-                inventoryTagger);
+                inventoryTagger, ledgerService);
         registerCommand("purrlog", "PurrTechDetailLogger admin/debug command", purrLogCommand);
 
         Bukkit.getScheduler().runTaskAsynchronously(this, () -> {

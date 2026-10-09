@@ -80,7 +80,8 @@ public final class WriteQueue {
     private static boolean isBulk(DbTask task) {
         return task instanceof DbTask.InsertEventTask
                 || task instanceof DbTask.UpsertLocationTask
-                || task instanceof DbTask.InsertDupeAlertTask;
+                || task instanceof DbTask.InsertDupeAlertTask
+                || task instanceof DbTask.InsertLedgerTask;
     }
 
     /**

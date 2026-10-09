@@ -17,6 +17,8 @@ public record TemplateDefinition(
         Pattern namePattern,
         Pattern lorePattern,
         boolean trackItems,
-        boolean trackBlocks
+        boolean trackBlocks,
+        /** {@code mode: ledger} - items are counted, not tagged: no UUID, they stack like vanilla. */
+        boolean ledger
 ) {
 }

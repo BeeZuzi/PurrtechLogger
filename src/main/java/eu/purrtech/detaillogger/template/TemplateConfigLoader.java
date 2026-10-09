@@ -105,8 +105,19 @@ public final class TemplateConfigLoader {
             logger.warning("templates.yml: '" + key + "' ma track-items i track-blocks na false, nebude nic sledovat");
         }
 
+        // mode: unit (default) = every item gets its own UUID. mode: ledger = stackable commodity
+        // (keys, money, diamonds): not tagged at all, only counted - see LedgerService.
+        String mode = section.getString("mode", "unit");
+        boolean ledger = "ledger".equalsIgnoreCase(mode);
+        if (!ledger && !"unit".equalsIgnoreCase(mode)) {
+            logger.warning("templates.yml: '" + key + "' ma neznamy mode '" + mode + "' (unit/ledger), pouzivam unit");
+        }
+        if (ledger && trackBlocks) {
+            logger.warning("templates.yml: '" + key + "' mode ledger plati jen pro itemy, track-blocks se ignoruje");
+        }
+
         return new TemplateDefinition(key, material, customModelData, pdcMarkerKey, pdcMarkerValue,
-                namePattern, lorePattern, trackItems, trackBlocks);
+                namePattern, lorePattern, trackItems, trackBlocks, ledger);
     }
 
     private Pattern compilePattern(String templateKey, String raw, String fieldName) {

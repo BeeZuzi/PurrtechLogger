@@ -24,6 +24,11 @@
 #       value: "true"
 #     track-items: true
 #     track-blocks: true
+#   gold_key:                  # a stackable commodity: counted, not tagged
+#     material: TRIPWIRE_HOOK
+#     name-pattern: "Zlaty klic"
+#     mode: ledger             # default is "unit" (every item gets its own UUID)
+#     track-items: true
 #   named_item:
 #     material: NETHERITE_INGOT
 #     name-pattern: "Rare Ingot"

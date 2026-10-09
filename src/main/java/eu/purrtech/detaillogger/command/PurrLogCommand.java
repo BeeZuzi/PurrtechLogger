@@ -12,6 +12,7 @@ import eu.purrtech.detaillogger.db.dao.TrackedUnitRecord;
 import eu.purrtech.detaillogger.gui.AdminGuiService;
 import eu.purrtech.detaillogger.template.TemplateRegistry;
 import eu.purrtech.detaillogger.tracking.HistoryService;
+import eu.purrtech.detaillogger.tracking.LedgerService;
 import eu.purrtech.detaillogger.tracking.StackDebug;
 import eu.purrtech.detaillogger.tracking.listener.InventoryTagListener;
 import eu.purrtech.detaillogger.tracking.PlayerDirectoryService;
@@ -60,12 +61,14 @@ public final class PurrLogCommand implements BasicCommand {
     private final AdminGuiService adminGuiService;
     private final PlayerDirectoryService playerDirectory;
     private final InventoryTagListener inventoryTagger;
+    private final LedgerService ledgerService;
 
     public PurrLogCommand(DetailLoggerPlugin plugin, TrackedUnitDao trackedUnitDao, EventDao eventDao,
                            TemplateRegistry templateRegistry, File templatesFile, HistoryService historyService,
                            DupeAlertDao dupeAlertDao, ReconciliationSweepTask sweepTask,
                            AdminGuiService adminGuiService, PlayerDirectoryService playerDirectory,
-                           InventoryTagListener inventoryTagger) {
+                           InventoryTagListener inventoryTagger, LedgerService ledgerService) {
+        this.ledgerService = ledgerService;
         this.inventoryTagger = inventoryTagger;
         this.plugin = plugin;
         this.trackedUnitDao = trackedUnitDao;
@@ -104,6 +107,14 @@ public final class PurrLogCommand implements BasicCommand {
             runAlerts(sender);
             return;
         }
+        if (args.length >= 4 && args[0].equalsIgnoreCase("issue")) {
+            runIssue(sender, args);
+            return;
+        }
+        if (args.length >= 1 && args[0].equalsIgnoreCase("ledger")) {
+            runLedger(sender, args);
+            return;
+        }
         if (args.length == 2 && args[0].equalsIgnoreCase("mint")) {
             runMint(sender, args[1]);
             return;
@@ -134,6 +145,55 @@ public final class PurrLogCommand implements BasicCommand {
             return;
         }
         sendHelp(sender);
+    }
+
+    /**
+     * {@code /purrlog issue <hrac> <sablona> <pocet> [duvod...]}: how a third-party plugin (crate, shop,
+     * quest...) reports that it just gave a player ledger items. Run it right before or after the give -
+     * the order does not matter (see IssueMatcher). Without a report such items are an alert.
+     */
+    private void runIssue(CommandSender sender, String[] args) {
+        org.bukkit.entity.Player target = Bukkit.getPlayerExact(args[1]);
+        if (target == null) {
+            sender.sendMessage("Hrac '" + args[1] + "' neni online.");
+            return;
+        }
+        if (!ledgerService.isLedgerTemplate(args[2])) {
+            sender.sendMessage("Sablona '" + args[2] + "' neexistuje nebo nema mode: ledger. Ledger sablony: "
+                    + String.join(", ", ledgerService.ledgerTemplateKeys()));
+            return;
+        }
+        int amount;
+        try {
+            amount = Integer.parseInt(args[3]);
+        } catch (NumberFormatException e) {
+            amount = 0;
+        }
+        if (amount <= 0) {
+            sender.sendMessage("Pocet musi byt kladne cele cislo.");
+            return;
+        }
+        String reason = args.length > 4 ? String.join(" ", java.util.Arrays.copyOfRange(args, 4, args.length)) : sender.getName();
+        sender.sendMessage(ledgerService.issue(target, args[2], amount, reason));
+    }
+
+    /** {@code /purrlog ledger [sablona]}: who holds how much of a ledger item, or the list of ledger items. */
+    private void runLedger(CommandSender sender, String[] args) {
+        if (args.length < 2) {
+            sender.sendMessage("Ledger sablony: " + String.join(", ", ledgerService.ledgerTemplateKeys())
+                    + " - /purrlog ledger <sablona>");
+            return;
+        }
+        if (!ledgerService.isLedgerTemplate(args[1])) {
+            sender.sendMessage("Sablona '" + args[1] + "' neni v mode: ledger.");
+            return;
+        }
+        var holders = ledgerService.topHolders(args[1]);
+        sender.sendMessage("=== " + args[1] + " - online hraci (inventar, bez ender chestu) ===");
+        if (holders.isEmpty()) {
+            sender.sendMessage("(nikdo to u sebe nema)");
+        }
+        holders.stream().limit(15).forEach(e -> sender.sendMessage(" " + e.getKey() + ": " + e.getValue()));
     }
 
     /**
@@ -213,6 +273,8 @@ public final class PurrLogCommand implements BasicCommand {
         sender.sendMessage("/purrlog player <nick|uuid> - profil a UUID konkretniho hrace");
         sender.sendMessage("/purrlog sweep - rucne spusti reconciliation sweep");
         sender.sendMessage("/purrlog mint <hrac> - oznaci vsechny neoznacene sablonove itemy v jeho inventari");
+        sender.sendMessage("/purrlog issue <hrac> <sablona> <pocet> [duvod] - hlaseni vydani ledger itemu (crate/obchod)");
+        sender.sendMessage("/purrlog ledger [sablona] - kdo kolik drzi ledger itemu");
         sender.sendMessage("/purrlog reload - znovu nacte templates.yml");
         sender.sendMessage("/purrlog template import <klic> - vytvori sablonu z drzeneho itemu");
         sender.sendMessage("/purrlog dbtest - overi DB potrubi zapisem/ctenim testovaciho zaznamu");

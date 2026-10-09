@@ -93,6 +93,25 @@ class TemplateConfigLoaderTest {
     }
 
     @Test
+    void modeLedgerIsParsedAndUnitIsTheDefault() {
+        List<TemplateDefinition> defs = load("""
+                templates:
+                  gold_key:
+                    material: TRIPWIRE_HOOK
+                    mode: ledger
+                  plain_sword:
+                    material: DIAMOND_SWORD
+                  odd:
+                    material: STICK
+                    mode: whatever
+                """);
+        assertEquals(3, defs.size());
+        assertTrue(defs.stream().filter(d -> d.key().equals("gold_key")).findFirst().orElseThrow().ledger());
+        assertFalse(defs.stream().filter(d -> d.key().equals("plain_sword")).findFirst().orElseThrow().ledger());
+        assertFalse(defs.stream().filter(d -> d.key().equals("odd")).findFirst().orElseThrow().ledger()); // unknown -> unit
+    }
+
+    @Test
     void missingFile_returnsEmptyList() {
         TemplateConfigLoader freshLoader = new TemplateConfigLoader(Logger.getLogger("test"));
         List<TemplateDefinition> defs = freshLoader.load(tempDir.resolve("does-not-exist.yml").toFile());

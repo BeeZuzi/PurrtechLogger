@@ -30,3 +30,13 @@ event-priority:
   SEEN: LOW                  # spotted when opening a container / joining
   VIEWED_IN_MENU: LOW
   MOVED: LOWEST              # moved between slots - by far the most frequent
+
+# Item ledger - for templates with "mode: ledger" in templates.yml (stackable commodities such as keys,
+# money or diamonds: they are NOT tagged, they stack like normal items, and are counted instead).
+# A third-party plugin that hands such items out (crate, shop, quest reward) must report it with the
+# command:  /purrlog issue <player> <template> <amount> [reason]   (run it before or after the give).
+# Items that appear in a player's inventory with no ordinary cause and no such report are an alert.
+ledger:
+  alerts: true          # put suspicious findings into /purrlog alerts
+  alert-threshold: 1    # ignore findings smaller than this many items
+  grace-seconds: 5      # how long a report may arrive after (or before) the items themselves
