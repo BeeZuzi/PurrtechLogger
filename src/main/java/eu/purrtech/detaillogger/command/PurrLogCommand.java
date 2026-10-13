@@ -12,6 +12,7 @@ import eu.purrtech.detaillogger.db.dao.TrackedUnitRecord;
 import eu.purrtech.detaillogger.gui.AdminGuiService;
 import eu.purrtech.detaillogger.template.TemplateRegistry;
 import eu.purrtech.detaillogger.tracking.HistoryService;
+import eu.purrtech.detaillogger.tracking.ItemTrackingService;
 import eu.purrtech.detaillogger.tracking.LedgerService;
 import eu.purrtech.detaillogger.tracking.StackDebug;
 import eu.purrtech.detaillogger.tracking.listener.InventoryTagListener;
@@ -62,12 +63,15 @@ public final class PurrLogCommand implements BasicCommand {
     private final PlayerDirectoryService playerDirectory;
     private final InventoryTagListener inventoryTagger;
     private final LedgerService ledgerService;
+    private final ItemTrackingService itemTracking;
 
     public PurrLogCommand(DetailLoggerPlugin plugin, TrackedUnitDao trackedUnitDao, EventDao eventDao,
                            TemplateRegistry templateRegistry, File templatesFile, HistoryService historyService,
                            DupeAlertDao dupeAlertDao, ReconciliationSweepTask sweepTask,
                            AdminGuiService adminGuiService, PlayerDirectoryService playerDirectory,
-                           InventoryTagListener inventoryTagger, LedgerService ledgerService) {
+                           InventoryTagListener inventoryTagger, LedgerService ledgerService,
+                           ItemTrackingService itemTracking) {
+        this.itemTracking = itemTracking;
         this.ledgerService = ledgerService;
         this.inventoryTagger = inventoryTagger;
         this.plugin = plugin;
@@ -109,6 +113,10 @@ public final class PurrLogCommand implements BasicCommand {
         }
         if (args.length >= 4 && args[0].equalsIgnoreCase("issue")) {
             runIssue(sender, args);
+            return;
+        }
+        if (args.length >= 1 && args[0].equalsIgnoreCase("reference")) {
+            runReference(sender, args);
             return;
         }
         if (args.length >= 1 && args[0].equalsIgnoreCase("ledger")) {
@@ -175,6 +183,33 @@ public final class PurrLogCommand implements BasicCommand {
         }
         String reason = args.length > 4 ? String.join(" ", java.util.Arrays.copyOfRange(args, 4, args.length)) : sender.getName();
         sender.sendMessage(ledgerService.issue(target, args[2], amount, reason));
+    }
+
+    /**
+     * {@code /purrlog reference} - makes the held item the REFERENCE (master) of an item a crate hands
+     * out; {@code /purrlog reference done} ends the setup. While the setup is open the master is left
+     * alone, so it can be put into the crate's config. Afterwards every copy that shows up anywhere gets
+     * its own fresh UUIDs, linked to the master.
+     */
+    private void runReference(CommandSender sender, String[] args) {
+        if (args.length >= 2 && args[1].equalsIgnoreCase("done")) {
+            itemTracking.closeReferenceSessions();
+            sender.sendMessage("Nastaveni referencniho itemu ukonceno - kopie se od ted oznacuji novymi UUID.");
+            return;
+        }
+        if (!(sender instanceof org.bukkit.entity.Player player)) {
+            sender.sendMessage("Jen pro hrace (drz item v ruce).");
+            return;
+        }
+        org.bukkit.inventory.ItemStack held = player.getInventory().getItemInMainHand();
+        var reference = itemTracking.createReference(held, player.getLocation(), player);
+        if (reference.isEmpty()) {
+            sender.sendMessage("Drz v ruce PRESNE 1 kus itemu, ktery odpovida sablone (bez mode: ledger).");
+            return;
+        }
+        player.getInventory().setItemInMainHand(held);
+        sender.sendMessage("Referencni item: " + reference.get() + ". Uloz ho do crate (ten item v ruce), "
+                + "pak napis /purrlog reference done (jinak se sam ukonci za 10 min).");
     }
 
     /** {@code /purrlog ledger [sablona]}: who holds how much of a ledger item, or the list of ledger items. */
@@ -275,6 +310,7 @@ public final class PurrLogCommand implements BasicCommand {
         sender.sendMessage("/purrlog mint <hrac> - oznaci vsechny neoznacene sablonove itemy v jeho inventari");
         sender.sendMessage("/purrlog issue <hrac> <sablona> <pocet> [duvod] - hlaseni vydani ledger itemu (crate/obchod)");
         sender.sendMessage("/purrlog ledger [sablona] - kdo kolik drzi ledger itemu");
+        sender.sendMessage("/purrlog reference [done] - drzeny item se stane referencnim (vzor pro crate), kopie dostanou nova UUID");
         sender.sendMessage("/purrlog reload - znovu nacte templates.yml");
         sender.sendMessage("/purrlog template import <klic> - vytvori sablonu z drzeneho itemu");
         sender.sendMessage("/purrlog dbtest - overi DB potrubi zapisem/ctenim testovaciho zaznamu");

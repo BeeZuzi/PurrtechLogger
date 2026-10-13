@@ -69,6 +69,12 @@ public final class LedgerService {
     private final Map<IssueMatcher.Key, Net> tickNet = new LinkedHashMap<>();
     private final Map<UUID, Stamp> stamps = new HashMap<>();
     private final Map<UUID, Map<String, Integer>> counts = new HashMap<>();
+    /** The tick a player last ran a command in - to explain items that left their inventory with it. */
+    private final Map<UUID, Integer> commandTickOf = new HashMap<>();
+
+    public void playerCommand(UUID player) {
+        commandTickOf.put(player, Bukkit.getCurrentTick());
+    }
     private boolean flushScheduled;
     private int commandTick = -1;
 
@@ -164,6 +170,9 @@ public final class LedgerService {
             }
             int total = counts.computeIfAbsent(key.player(), k -> new HashMap<>()).merge(key.template(), net, Integer::sum);
             String cause = explain(key.player(), entry.getValue().tick());
+            if (cause == null && net < 0 && commandTickOf.getOrDefault(key.player(), -1) == entry.getValue().tick()) {
+                cause = "COMMAND"; // took the items away in the same tick as a command (an auction listing...)
+            }
             if (net > 0 && cause == null) {
                 // Appeared from nowhere: a reporting plugin may still tell us (or already did).
                 var matched = matcher.addGain(key, net, "bez priciny", now, graceMillis());

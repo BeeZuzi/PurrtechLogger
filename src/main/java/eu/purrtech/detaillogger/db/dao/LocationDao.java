@@ -104,6 +104,28 @@ public final class LocationDao {
         }
     }
 
+    /**
+     * Unit UUID -> the {@code menu_name} column, for every unit whose current location has this type.
+     * Used at startup to reload COMMAND_VANISHED units (the command is kept in menu_name). Blocking read.
+     */
+    public java.util.Map<String, String> findByType(String locationType) throws SQLException {
+        MainThreadCheck.assertAsync();
+        Connection connection = borrow();
+        try (PreparedStatement ps = connection.prepareStatement(
+                "SELECT unit_uuid, menu_name FROM locations WHERE location_type = ?")) {
+            ps.setString(1, locationType);
+            try (ResultSet rs = ps.executeQuery()) {
+                java.util.Map<String, String> result = new java.util.HashMap<>();
+                while (rs.next()) {
+                    result.put(rs.getString(1), rs.getString(2));
+                }
+                return result;
+            }
+        } finally {
+            database.readPool().release(connection);
+        }
+    }
+
     private static Integer nullableInt(ResultSet rs, String column) throws SQLException {
         int value = rs.getInt(column);
         return rs.wasNull() ? null : value;

@@ -101,6 +101,24 @@ public final class TrackedUnitDao {
         }
     }
 
+    /** UUIDs of every unit with this origin (e.g. REFERENCE). Blocking read - off the main thread. */
+    public java.util.List<String> findUuidsByOrigin(String origin) throws SQLException {
+        MainThreadCheck.assertAsync();
+        Connection connection = borrow();
+        try (PreparedStatement ps = connection.prepareStatement("SELECT uuid FROM tracked_units WHERE origin = ?")) {
+            ps.setString(1, origin);
+            try (ResultSet rs = ps.executeQuery()) {
+                java.util.List<String> uuids = new java.util.ArrayList<>();
+                while (rs.next()) {
+                    uuids.add(rs.getString(1));
+                }
+                return uuids;
+            }
+        } finally {
+            database.readPool().release(connection);
+        }
+    }
+
     private Connection borrow() throws SQLException {
         try {
             return database.readPool().borrow();

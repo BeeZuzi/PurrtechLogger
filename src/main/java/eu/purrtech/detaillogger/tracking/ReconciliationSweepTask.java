@@ -95,6 +95,9 @@ public final class ReconciliationSweepTask {
                 continue;
             }
             for (UUID uuid : tracking.readAllUnits(item)) {
+                if (tracking.isReference(uuid)) {
+                    continue; // a reference master is MEANT to exist in many copies until they are relabelled
+                }
                 sightings.add(new Sighting(uuid, player, inventory, slot, item, isEnderChest));
             }
         }

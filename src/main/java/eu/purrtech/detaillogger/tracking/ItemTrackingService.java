@@ -14,8 +14,11 @@ import org.bukkit.inventory.ItemStack;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.logging.Logger;
 
 /**
@@ -148,6 +151,145 @@ public final class ItemTrackingService {
             return Optional.empty();
         }
         return matcher.match(item).filter(TemplateDefinition::ledger);
+    }
+
+    // === Reference items ===========================================================================
+    // The master copy of an item a crate (or any plugin) hands out. It has a UUID, the DB marks it as
+    // a reference (tracked_units.origin = REFERENCE), and whenever a COPY of it shows up anywhere the
+    // copy is given fresh UUIDs of its own, linked to the master in unit_lineage (REFERENCE_COPY).
+
+    public static final String ORIGIN_REFERENCE = "REFERENCE";
+    private static final long REFERENCE_SESSION_MS = 10 * 60_000L;
+
+    private final Set<UUID> references = ConcurrentHashMap.newKeySet();
+    /** Reference UUID -> until when its owner is still setting it up (see {@link #createReference}). */
+    private final Map<UUID, Long> referenceSessions = new ConcurrentHashMap<>();
+
+    /** Loaded from the DB at startup (async) - which units are references. */
+    public void loadReferences(java.util.Collection<UUID> loaded) {
+        references.addAll(loaded);
+    }
+
+    public boolean isReference(UUID unit) {
+        return references.contains(unit);
+    }
+
+    public boolean carriesReference(List<UUID> units) {
+        for (UUID unit : units) {
+            if (references.contains(unit)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean referenceSessionActive(List<UUID> units) {
+        long now = System.currentTimeMillis();
+        for (UUID unit : units) {
+            Long until = referenceSessions.get(unit);
+            if (until != null && until > now) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Makes the held item a reference. Exactly one item, matching a unit-mode template. It is tagged with
+     * a fresh UUID and registered as a reference, and a SESSION opens for 10 minutes: while it is open the
+     * master (and copies) are left alone, so the owner can put it into the crate's config without it being
+     * re-labelled on the spot. {@link #closeReferenceSessions} (or the timeout) ends it. Mutates
+     * {@code held}'s meta in place - the caller writes it back. Empty if the item doesn't qualify.
+     */
+    public Optional<UUID> createReference(ItemStack held, Location where, Player owner) {
+        if (held == null || held.getType().isAir() || held.getAmount() != 1) {
+            return Optional.empty();
+        }
+        Optional<TemplateDefinition> match = matcher.match(held);
+        if (match.isEmpty() || match.get().ledger() || registry.idOf(match.get().key()) == null) {
+            return Optional.empty();
+        }
+        long now = System.currentTimeMillis();
+        List<UUID> existing = itemTag.readUnits(held);
+        UUID reference;
+        if (existing.size() == 1 && references.contains(existing.get(0))) {
+            reference = existing.get(0); // already the master - just reopen the session
+        } else {
+            if (!existing.isEmpty()) {
+                markDestroyedForAll(existing, "REFERENCE_REPLACED", where, owner); // it had an ordinary unit
+            }
+            reference = UUID.randomUUID();
+            itemTag.writeSingleUnit(held, reference, match.get().key());
+            trackedUnitDao.enqueueUpsert(reference.toString(), registry.idOf(match.get().key()), "ITEM",
+                    ORIGIN_REFERENCE, null, now, true, null, null);
+            eventDao.enqueue(reference.toString(), "GENESIS", now, null, null, null, null, null,
+                    jsonField("origin", ORIGIN_REFERENCE));
+            references.add(reference);
+        }
+        referenceSessions.put(reference, now + REFERENCE_SESSION_MS);
+        return Optional.of(reference);
+    }
+
+    public void closeReferenceSessions() {
+        referenceSessions.clear();
+    }
+
+    private List<UUID> deriveFromReference(ItemStack item, List<UUID> raw) {
+        List<UUID> masters = new ArrayList<>();
+        for (UUID unit : raw) {
+            if (references.contains(unit)) {
+                masters.add(unit);
+            }
+        }
+        List<UUID> copies = deriveUnits(item, masters, "REFERENCE_COPY");
+        return copies.isEmpty() ? raw : copies; // template not in the DB yet -> try again next time
+    }
+
+    // === Items that vanished right after a command ================================================
+    // A command (an auction listing, a mail, a trade...) can take an item out of the inventory with no
+    // click and no event. When one does and the unit turns up nowhere else, it is booked as VANISHED_BY_
+    // COMMAND with the command. If it later shows up again, that is REAPPEARED_AFTER_COMMAND - noted,
+    // and explicitly NOT a duplicate.
+
+    private final Map<UUID, String> vanishedByCommand = new ConcurrentHashMap<>();
+
+    /** Loaded from the DB at startup (async): units whose last location is COMMAND_VANISHED. */
+    public void loadVanished(Map<UUID, String> loaded) {
+        vanishedByCommand.putAll(loaded);
+    }
+
+    public boolean anyVanished(List<UUID> units) {
+        for (UUID unit : units) {
+            if (vanishedByCommand.containsKey(unit)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** {@code unit} left {@code actor}'s inventory during {@code command} and was found nowhere else. */
+    public void markVanished(UUID unit, Player actor, String command) {
+        long now = System.currentTimeMillis();
+        Location loc = actor.getLocation();
+        String world = loc.getWorld() != null ? loc.getWorld().getName() : null;
+        locationDao.enqueueUpsert(unit.toString(), "COMMAND_VANISHED", actor.getUniqueId().toString(), null, world,
+                loc.getBlockX(), loc.getBlockY(), loc.getBlockZ(), null, null, null, command, now);
+        eventDao.enqueue(unit.toString(), "VANISHED_BY_COMMAND", now, world, loc.getBlockX(), loc.getBlockY(),
+                loc.getBlockZ(), actor.getUniqueId().toString(), jsonField("command", command),
+                actor.getGameMode().name(), null);
+        if (vanishedByCommand.size() < 50_000) {
+            vanishedByCommand.put(unit, command);
+        }
+    }
+
+    private void noteReappearance(UUID uuid, LocationContext ctx, Player actor) {
+        String command = vanishedByCommand.remove(uuid);
+        if (command == null) {
+            return;
+        }
+        eventDao.enqueue(uuid.toString(), "REAPPEARED_AFTER_COMMAND", System.currentTimeMillis(), ctx.world(),
+                ctx.x(), ctx.y(), ctx.z(), actor != null ? actor.getUniqueId().toString() : null,
+                jsonField("vanished_by", command), null, null);
     }
 
     public boolean isTracked(ItemStack item) {
@@ -317,6 +459,13 @@ public final class ItemTrackingService {
      * of {@link #ensureTracked} once merged stacks are possible.
      */
     public List<UUID> ensureTrackedAll(ItemStack item, String origin) {
+        // An item carrying a REFERENCE unit's UUID is a copy of the master (e.g. handed out by a crate
+        // that stores the master in its config): every copy becomes its own new unit. Checked before the
+        // repair below, which would otherwise "top up" a stack that carries just the one master UUID.
+        List<UUID> raw = itemTag.readUnits(item);
+        if (carriesReference(raw)) {
+            return referenceSessionActive(raw) ? raw : deriveFromReference(item, raw);
+        }
         // Every caller writes the item back afterward, so this is also where stacks from the old
         // one-UUID-per-stack genesis get repaired (chest open, join scan, pickup, ...).
         List<UUID> existing = readAllUnitsNormalized(item);
@@ -419,12 +568,14 @@ public final class ItemTrackingService {
      * Upserts the unit's current location and appends a history event for the move.
      */
     public void recordLocation(UUID uuid, LocationContext ctx, String eventType, Player actor) {
+        noteReappearance(uuid, ctx, actor);
         locationRecorder.record(uuid, ctx, eventType, actor);
     }
 
     /** Same as {@link #recordLocation} but for every unit in a (possibly merged) stack at once. */
     public void recordLocationForAll(List<UUID> uuids, LocationContext ctx, String eventType, Player actor) {
         for (UUID uuid : uuids) {
+            noteReappearance(uuid, ctx, actor);
             locationRecorder.record(uuid, ctx, eventType, actor);
         }
     }

@@ -29,6 +29,7 @@ import eu.purrtech.detaillogger.tracking.listener.ItemLifecycleListener;
 import eu.purrtech.detaillogger.tracking.listener.PlayerJoinScanListener;
 import eu.purrtech.detaillogger.tracking.listener.PlayerPresenceListener;
 import eu.purrtech.detaillogger.tracking.LedgerService;
+import eu.purrtech.detaillogger.tracking.listener.CommandVanishListener;
 import eu.purrtech.detaillogger.tracking.listener.InventoryTagListener;
 import eu.purrtech.detaillogger.tracking.listener.LedgerListener;
 import eu.purrtech.detaillogger.tracking.listener.ItemTransformListener;
@@ -101,6 +102,21 @@ public final class DetailLoggerPlugin extends JavaPlugin {
         LedgerService ledgerService = new LedgerService(itemTracking, templateRegistry, new LedgerDao(database),
                 dupeAlertDao, this);
         getServer().getPluginManager().registerEvents(new LedgerListener(ledgerService, this), this);
+        getServer().getPluginManager().registerEvents(new CommandVanishListener(itemTracking, this), this);
+        // Reference items and "vanished after a command" units live in the DB; load them for the
+        // main-thread fast paths (async: the reads must not run on the server thread).
+        Bukkit.getScheduler().runTaskAsynchronously(this, () -> {
+            try {
+                itemTracking.loadReferences(trackedUnitDao.findUuidsByOrigin(ItemTrackingService.ORIGIN_REFERENCE)
+                        .stream().map(java.util.UUID::fromString).toList());
+                java.util.Map<java.util.UUID, String> vanished = new java.util.HashMap<>();
+                locationDao.findByType("COMMAND_VANISHED").forEach((unit, command) ->
+                        vanished.put(java.util.UUID.fromString(unit), command != null ? command : "?"));
+                itemTracking.loadVanished(vanished);
+            } catch (Exception e) {
+                getLogger().severe("Nacteni referencnich/zmizelych jednotek selhalo: " + e);
+            }
+        });
         InventoryTagListener inventoryTagger = new InventoryTagListener(itemTracking, this);
         getServer().getPluginManager().registerEvents(inventoryTagger, this);
         getServer().getPluginManager().registerEvents(new ShulkerSessionListener(itemTracking, itemTag, eventDao), this);
@@ -112,7 +128,7 @@ public final class DetailLoggerPlugin extends JavaPlugin {
 
         var purrLogCommand = new PurrLogCommand(this, trackedUnitDao, eventDao, templateRegistry,
                 templatesFile, historyService, dupeAlertDao, sweepTask, adminGuiService, playerDirectory,
-                inventoryTagger, ledgerService);
+                inventoryTagger, ledgerService, itemTracking);
         registerCommand("purrlog", "PurrTechDetailLogger admin/debug command", purrLogCommand);
 
         Bukkit.getScheduler().runTaskAsynchronously(this, () -> {

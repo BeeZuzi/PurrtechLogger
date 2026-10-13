@@ -48,12 +48,22 @@ public final class InventoryTagListener implements Listener {
     @EventHandler(priority = EventPriority.MONITOR)
     public void onSlotChange(PlayerInventorySlotChangeEvent event) {
         ItemStack now = event.getNewItemStack();
-        if (now.getType().isAir() || !tracking.mayBeTemplate(now.getType()) || tracking.isTracked(now)) {
+        if (now.getType().isAir() || !tracking.mayBeTemplate(now.getType()) || !needsAttention(now)) {
             return;
         }
         Player player = event.getPlayer();
         int slot = event.getSlot();
         Bukkit.getScheduler().runTask(plugin, () -> tagSlot(player, slot));
+    }
+
+    /**
+     * Whether a stack that just appeared in an inventory needs work: it has no UUID yet (give it one),
+     * it is a copy of a REFERENCE item (give it its own), or it carries units that vanished after a
+     * command (note that they are back). An ordinary tracked stack needs nothing.
+     */
+    private boolean needsAttention(ItemStack item) {
+        List<UUID> units = tracking.readAllUnits(item);
+        return units.isEmpty() || tracking.carriesReference(units) || tracking.anyVanished(units);
     }
 
     /** Tags every untagged template item in the player's inventory now. Returns how many units were created. */
@@ -71,13 +81,16 @@ public final class InventoryTagListener implements Listener {
         }
         PlayerInventory inventory = player.getInventory();
         ItemStack item = inventory.getItem(slot);
-        if (item == null || item.getType().isAir() || tracking.isTracked(item)) {
+        if (item == null || item.getType().isAir() || !needsAttention(item)) {
             return 0;
         }
         String origin = player.getGameMode() == GameMode.CREATIVE ? "CREATIVE" : ORIGIN_ISSUED;
         List<UUID> units = tracking.ensureTrackedAll(item, origin);
         if (units.isEmpty()) {
             return 0; // not a template item after all
+        }
+        if (tracking.carriesReference(units)) {
+            return 0; // the reference master during its setup session: leave it exactly as it is
         }
         inventory.setItem(slot, item);
 

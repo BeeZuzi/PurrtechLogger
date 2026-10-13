@@ -126,6 +126,7 @@ public final class LedgerListener implements Listener {
     @EventHandler(priority = EventPriority.MONITOR)
     public void onPlayerCommand(PlayerCommandPreprocessEvent event) {
         ledger.commandRan(event.getMessage());
+        ledger.playerCommand(event.getPlayer().getUniqueId());
     }
 
     @EventHandler(priority = EventPriority.MONITOR)

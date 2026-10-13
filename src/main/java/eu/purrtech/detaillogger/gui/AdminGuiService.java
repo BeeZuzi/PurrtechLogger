@@ -136,7 +136,7 @@ public final class AdminGuiService implements Listener {
     private static final List<String> EVENT_CATEGORIES = List.of(
             "GENESIS", "PLACED", "MOVED", "MERGED", "SEEN", "SPAWNED",
             "DROPPED", "PICKED_UP", "DESTROYED", "CREATIVE_DUPLICATE", "VIEWED_IN_MENU",
-            ShulkerSessionLog.EVENT_TYPE);
+            ShulkerSessionLog.EVENT_TYPE, "VANISHED_BY_COMMAND");
 
     private static final Map<String, String> CATEGORY_LABELS = Map.ofEntries(
             Map.entry("GENESIS", "Vznik"),
@@ -153,7 +153,10 @@ public final class AdminGuiService implements Listener {
             // typical 6-8 char labels instead. See [[reference-purrtechdisplaygui-coordinate-rules]].
             Map.entry("CREATIVE_DUPLICATE", "Dupe"),
             Map.entry("VIEWED_IN_MENU", "V menu"),
-            Map.entry(ShulkerSessionLog.EVENT_TYPE, "Shulker"));
+            Map.entry(ShulkerSessionLog.EVENT_TYPE, "Shulker"),
+            Map.entry("VANISHED_BY_COMMAND", "Zmizel cmd"),
+            Map.entry("REAPPEARED_AFTER_COMMAND", "Zpet po cmd"),
+            Map.entry("MOVED_BY_COMMAND", "Presun cmd"));
 
     /** Monday-first weekday header row for {@link #openCalendarPage}, diacritics stripped per the
      * project's no-diacritics-in-labels convention (Pondeli..Nedele). */
