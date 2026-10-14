@@ -71,6 +71,10 @@ public sealed interface DbTask {
                              Integer totalAfter, String detail) implements DbTask {
     }
 
+    /** Tracking was switched off and every item lost its tag: retire all live item units (not references). */
+    record RetireItemUnitsTask(long at, String cause) implements DbTask {
+    }
+
     /** Startup safety net against "online" rows left behind by an unclean shutdown. */
     record ResetAllPlayersOfflineTask() implements DbTask {
     }

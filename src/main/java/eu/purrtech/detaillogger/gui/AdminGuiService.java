@@ -292,6 +292,7 @@ public final class AdminGuiService implements Listener {
         this.playerDirectory = playerDirectory;
         this.eventDao = eventDao;
         this.plugin = plugin;
+        ButtonSkin.init(plugin);
         this.logger = logger;
     }
 
@@ -306,8 +307,7 @@ public final class AdminGuiService implements Listener {
         buttons.add(navButton("search", cx(0), cy(-0.05), 0.04, "Hledat podle UUID", e -> openUuidSearchKeyboard(player)));
         buttons.add(navButton("alerts", cx(0), cy(0.30), 0.05, "Nevyresene alerty", e -> openAlerts(player)));
         buttons.add(navButton("close", cx(0), cy(0.65), 0.05, "Zavrit", e -> DisplayGuiAPI.closeMenu(player)));
-        buttons.add(navButton("player-search", cx(0), cy(1.00), 0.05, "Hledat hrace", e -> beginPlayerSearch(player)));
-        buttons.add(navButton("events", cx(0), cy(1.35), 0.05, "Vsechny udalosti", e -> openEventsPage(player)));
+        buttons.add(navButton("events", cx(0), cy(1.00), 0.05, "Vsechny udalosti", e -> openEventsPage(player)));
 
         ScreenPageData screen = new ScreenPageData(backgroundPage(), buttons, "purrtechlog:main", MENU_DISTANCE_PIXELS);
 //        DisplayGuiAPI.closeMenu(player);
@@ -494,11 +494,43 @@ public final class AdminGuiService implements Listener {
         DisplayGuiAPI.openMenu(player, screen);
     }
 
+    /** State of the players menu: the full directory (loaded once per open) plus the live search text. */
+    private static final class PlayersSession {
+        private final List<PlayerRecord> all;
+        private final StringBuilder query = new StringBuilder();
+        private int offset;
+
+        PlayersSession(List<PlayerRecord> all) {
+            this.all = all;
+        }
+    }
+
+    private static final List<String> SEARCH_KEYS = List.of(
+            "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q", "r", "s", "t",
+            "u", "v", "w", "x", "y", "z", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "_");
+    private static final int SEARCH_KEY_COLUMNS = 9;
+
+    private final Map<UUID, PlayersSession> playersSessions = new ConcurrentHashMap<>();
+
+    /** Opens the dedicated players menu (fresh session, empty search). */
     public void openPlayerList(Player player, int offset) {
+        loadPlayers(player, session -> session.offset = Math.max(0, offset));
+    }
+
+    /** Chat-typed search: opens the players menu with the text already in the search field. */
+    private void openPlayerSearch(Player player, String query) {
+        loadPlayers(player, session -> session.query.append(query.trim()));
+    }
+
+    private void loadPlayers(Player player, Consumer<PlayersSession> init) {
         Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
             try {
-                List<PlayerRecord> all = playerDirectory.listPlayers();
-                Bukkit.getScheduler().runTask(plugin, () -> openPlayerListPage(player, all, offset, null));
+                PlayersSession session = new PlayersSession(playerDirectory.listPlayers());
+                init.accept(session);
+                Bukkit.getScheduler().runTask(plugin, () -> {
+                    playersSessions.put(player.getUniqueId(), session);
+                    openPlayersMenu(player);
+                });
             } catch (SQLException e) {
                 logger.severe("Admin GUI nacteni seznamu hracu selhalo: " + e);
                 Bukkit.getScheduler().runTask(plugin, () -> player.sendMessage("Lookup selhal, viz konzole."));
@@ -506,59 +538,81 @@ public final class AdminGuiService implements Listener {
         });
     }
 
-    private void openPlayerSearch(Player player, String query) {
-        Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
-            try {
-                List<PlayerRecord> results = playerDirectory.searchPlayers(query);
-                Bukkit.getScheduler().runTask(plugin, () -> {
-                    if (results.isEmpty()) {
-                        player.sendMessage("Zadny hrac neodpovida '" + query + "'.");
-                        return;
-                    }
-                    if (results.size() == 1) {
-                        openPlayerDetail(player, results.get(0).uuid());
-                        return;
-                    }
-                    openPlayerListPage(player, results, 0, query);
-                });
-            } catch (SQLException e) {
-                logger.severe("Admin GUI hledani hrace selhalo: " + e);
-                Bukkit.getScheduler().runTask(plugin, () -> player.sendMessage("Lookup selhal, viz konzole."));
-            }
-        });
-    }
-
-    private void openPlayerListPage(Player player, List<PlayerRecord> all, int offset, String searchQuery) {
-        int clampedOffset = all.isEmpty() ? 0 : Math.max(0, Math.min(offset, all.size() - 1));
-        int end = Math.min(clampedOffset + PLAYERS_PAGE_SIZE, all.size());
-        List<PlayerRecord> page = all.subList(clampedOffset, end);
+    /**
+     * Players menu: filtered player list on the left, search field + on-screen keyboard on the right.
+     * Every keystroke filters the in-memory directory (name or UUID contains the text) and re-opens the page.
+     * Layout (rel to screen center, blocks): list rows x -2.6, step 0.45; keyboard x 1.9, step 0.62 x 0.5
+     * with 7px (0.44) hitboxes - under both steps; lowest control row y 1.25 (below the +1.5 floor line).
+     */
+    private void openPlayersMenu(Player player) {
+        PlayersSession s = playersSessions.get(player.getUniqueId());
+        if (s == null) {
+            openPlayerList(player, 0);
+            return;
+        }
+        String q = s.query.toString().toLowerCase(Locale.ROOT);
+        List<PlayerRecord> filtered = q.isEmpty() ? s.all : s.all.stream()
+                .filter(p -> p.currentName().toLowerCase(Locale.ROOT).contains(q) || p.uuid().toLowerCase(Locale.ROOT).contains(q))
+                .toList();
+        int offset = filtered.isEmpty() ? 0 : Math.max(0, Math.min(s.offset, filtered.size() - 1));
+        offset -= offset % PLAYERS_PAGE_SIZE;
+        s.offset = offset;
+        int end = Math.min(offset + PLAYERS_PAGE_SIZE, filtered.size());
+        final int pageStart = offset;
 
         List<ButtonData> buttons = new ArrayList<>();
-        double y = -1.5;
-        for (PlayerRecord p : page) {
-            String status = p.online() ? "[ONLINE] " : "[OFFLINE] ";
-            String suffix = p.online() ? "" : " (naposledy " + formatTime(p.lastSeenAt()) + ")";
-            String label = status + p.currentName() + suffix;
-            buttons.add(navButton("player-" + p.uuid(), cx(0), cy(y), 0.05, label, e -> openPlayerDetail(player, p.uuid())));
+        buttons.add(infoTextButton(cx(0), cy(-2.1), 0.04, List.of(
+                "Hraci - hledani: " + (s.query.isEmpty() ? "-" : s.query),
+                filtered.isEmpty() ? "0 hracu" : (offset + 1) + "-" + end + " z " + filtered.size())));
+
+        double y = -1.3;
+        for (PlayerRecord p : filtered.subList(offset, end)) {
+            String label = (p.online() ? "[ONLINE] " : "[OFFLINE] ") + p.currentName();
+            buttons.add(navButton("player-" + p.uuid(), cx(-2.6), cy(y), 0.05, label, e -> openPlayerDetail(player, p.uuid())));
             y += 0.45;
         }
-
-        List<String> infoLines = new ArrayList<>();
-        infoLines.add(searchQuery != null ? "Vysledky hledani: '" + searchQuery + "'" : "Vsichni hraci");
-        infoLines.add(all.isEmpty() ? "0 hracu" : (clampedOffset + 1) + "-" + end + " z " + all.size());
-        buttons.add(infoTextButton(cx(0), cy(-2.1), 0.04, infoLines));
-
-        if (clampedOffset > 0) {
-            buttons.add(navButton("prev", cx(-1.2), cy(y + 0.3), 0.05, "Predchozi",
-                    e -> openPlayerListPage(player, all, clampedOffset - PLAYERS_PAGE_SIZE, searchQuery)));
+        if (offset > 0) {
+            buttons.add(navButton("prev", cx(-3.3), cy(1.25), 0.05, "Predchozi", e -> {
+                s.offset = pageStart - PLAYERS_PAGE_SIZE;
+                openPlayersMenu(player);
+            }));
         }
-        if (end < all.size()) {
-            buttons.add(navButton("next", cx(1.2), cy(y + 0.3), 0.05, "Dalsi",
-                    e -> openPlayerListPage(player, all, clampedOffset + PLAYERS_PAGE_SIZE, searchQuery)));
+        if (end < filtered.size()) {
+            buttons.add(navButton("next", cx(-1.9), cy(1.25), 0.05, "Dalsi", e -> {
+                s.offset = pageStart + PLAYERS_PAGE_SIZE;
+                openPlayersMenu(player);
+            }));
         }
-        buttons.add(navButton("back", cx(0), cy(y + 0.6), 0.05, "Hlavni menu", e -> openMainMenu(player)));
 
-        ScreenPageData screen = new ScreenPageData(backgroundPage(), buttons, "purrtechlog:players:" + clampedOffset, MENU_DISTANCE_PIXELS);
+        double stepX = 0.62, startX = 1.9 - (SEARCH_KEY_COLUMNS - 1) * stepX / 2.0;
+        for (int i = 0; i < SEARCH_KEYS.size(); i++) {
+            String key = SEARCH_KEYS.get(i);
+            buttons.add(navButton("skey-" + i, cx(startX + (i % SEARCH_KEY_COLUMNS) * stepX),
+                    cy(-1.3 + (i / SEARCH_KEY_COLUMNS) * 0.5), 0.05, 7, 7, key, e -> {
+                        if (s.query.length() < 16) s.query.append(key);
+                        s.offset = 0;
+                        openPlayersMenu(player);
+                    }));
+        }
+        buttons.add(navButton("skey-back", cx(0.9), cy(0.9), 0.05, 24, 7, "Smazat", e -> {
+            if (!s.query.isEmpty()) s.query.setLength(s.query.length() - 1);
+            s.offset = 0;
+            openPlayersMenu(player);
+        }));
+        buttons.add(navButton("skey-clear", cx(2.1), cy(0.9), 0.05, 24, 7, "Vymazat", e -> {
+            s.query.setLength(0);
+            s.offset = 0;
+            openPlayersMenu(player);
+        }));
+        buttons.add(navButton("skey-chat", cx(3.3), cy(0.9), 0.05, 24, 7, "Do chatu", e -> beginPlayerSearch(player)));
+        buttons.add(navButton("back", cx(1.9), cy(1.25), 0.05, "Hlavni menu", e -> {
+            playersSessions.remove(player.getUniqueId());
+            openMainMenu(player);
+        }));
+
+        // Page key carries query + offset so every state is a genuinely new menu, never a reused one.
+        ScreenPageData screen = new ScreenPageData(backgroundPage(), buttons,
+                "purrtechlog:players:" + q + ":" + offset, MENU_DISTANCE_PIXELS);
         DisplayGuiAPI.openMenu(player, screen);
     }
 
@@ -649,6 +703,15 @@ public final class AdminGuiService implements Listener {
         return CENTER_Y + relY;
     }
 
+    /** Button design: the optional ItemsAdder frame behind the text (see {@link ButtonSkin}); the text
+     * background is then transparent unless the button carries a state colour (active / disabled). */
+    private LayersData buttonDesign(String id, TextDisplayLayerData text, double widthPixels, float rotationY, boolean stateColour) {
+        var frame = ButtonSkin.frame(GUI_PATH, id, widthPixels, rotationY);
+        if (frame == null) return new LayersData(List.of(text), GUI_PATH + ":" + id, GUI_PATH);
+        if (!stateColour) text.setBackground(TRANSPARENT);
+        return new LayersData(List.of(frame, text), GUI_PATH + ":" + id, GUI_PATH);
+    }
+
     private ButtonData navButton(String id, double x, double y, double z, String label,
                                   Consumer<MenuButtonClickEvent> onClick) {
         return navButton(id, x, y, z, label, onClick, false);
@@ -708,7 +771,7 @@ public final class AdminGuiService implements Listener {
         double widthPixels = Math.max(HITBOX_MIN_WIDTH_PX,
                 text.estimateContentWidthBlocks() * PIXELS_PER_BLOCK + HITBOX_PADDING_PX);
         double heightPixels = HITBOX_HEIGHT_PX;
-        LayersData design = new LayersData(List.of(text), GUI_PATH + ":" + id, GUI_PATH);
+        LayersData design = buttonDesign(id, text, widthPixels, rotationY, active);
         return ButtonData.builder()
                 .at(x, y, z)
                 .size(widthPixels, heightPixels)
@@ -731,7 +794,7 @@ public final class AdminGuiService implements Listener {
                 .setBackground(valid ? BUTTON_BACKGROUND : BUTTON_BACKGROUND_DISABLED);
         double widthPixels = Math.max(HITBOX_MIN_WIDTH_PX,
                 text.estimateContentWidthBlocks() * PIXELS_PER_BLOCK + HITBOX_PADDING_PX);
-        LayersData design = new LayersData(List.of(text), GUI_PATH + ":" + id, GUI_PATH);
+        LayersData design = buttonDesign(id, text, widthPixels, 0f, !valid);
         return ButtonData.builder()
                 .at(x, y, z)
                 .size(widthPixels, HITBOX_HEIGHT_PX)
@@ -758,7 +821,7 @@ public final class AdminGuiService implements Listener {
         TextDisplayLayerData text = new TextDisplayLayerData(0, 0, 0, GUI_PATH, id + "-text", 1)
                 .setText(List.of(label))
                 .setBackground(active ? BUTTON_BACKGROUND_ACTIVE : BUTTON_BACKGROUND);
-        LayersData design = new LayersData(List.of(text), GUI_PATH + ":" + id, GUI_PATH);
+        LayersData design = buttonDesign(id, text, widthPixels, 0f, active);
         return ButtonData.builder()
                 .at(x, y, z)
                 .size(widthPixels, heightPixels)

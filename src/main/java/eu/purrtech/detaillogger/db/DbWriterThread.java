@@ -147,6 +147,10 @@ final class DbWriterThread extends Thread {
                             INSERT INTO ledger(at, player_uuid, template_key, delta, cause, total_after, detail)
                             VALUES (?, ?, ?, ?, ?, ?, ?)
                             """);
+                 PreparedStatement retire = connection.prepareStatement("""
+                            UPDATE tracked_units SET alive = 0, destroyed_at = ?, destroyed_cause = ?
+                            WHERE alive = 1 AND kind = 'ITEM' AND origin != 'REFERENCE'
+                            """);
                  PreparedStatement resetAllOffline = connection.prepareStatement("""
                             UPDATE players SET online = 0 WHERE online = 1
                             """)) {
@@ -163,6 +167,7 @@ final class DbWriterThread extends Thread {
                 int insertNameHistoryCount = 0;
                 int lineageCount = 0;
                 int ledgerCount = 0;
+                int retireCount = 0;
                 boolean resetAllOfflineRequested = false;
                 java.util.Map<String, DbTask.UpsertLocationTask> latestLocation = new java.util.LinkedHashMap<>();
 
@@ -226,6 +231,12 @@ final class DbWriterThread extends Thread {
                             queueOrRun(lineage, lenient, task);
                             lineageCount++;
                         }
+                        case DbTask.RetireItemUnitsTask t -> {
+                            retire.setLong(1, t.at());
+                            retire.setString(2, t.cause());
+                            queueOrRun(retire, lenient, task);
+                            retireCount++;
+                        }
                         case DbTask.InsertLedgerTask t -> {
                             ledger.setLong(1, t.at());
                             ledger.setString(2, t.playerUuid());
@@ -270,6 +281,7 @@ final class DbWriterThread extends Thread {
                 if (insertNameHistoryCount > 0) insertNameHistory.executeBatch();
                 if (lineageCount > 0) lineage.executeBatch();
                 if (ledgerCount > 0) ledger.executeBatch();
+                if (retireCount > 0) retire.executeBatch(); // after the inserts, so units created in this batch are retired too
                 if (resetAllOfflineRequested) resetAllOffline.executeUpdate();
 
                 connection.commit();

@@ -40,3 +40,15 @@ ledger:
   alerts: true          # put suspicious findings into /purrlog alerts
   alert-threshold: 1    # ignore findings smaller than this many items
   grace-seconds: 5      # how long a report may arrive after (or before) the items themselves
+
+# Admin GUI (/purrlog gui) - needs PurrTechDisplayGUI.
+gui:
+  # Draw an ItemsAdder texture behind every button (falls back to plain coloured buttons when
+  # ItemsAdder or the item is missing).
+  textures: true
+  button-texture: "king:mp_button_click_me"
+
+# Nouzovy vypinac sledovani predmetu (meni se prikazem /purrlog tracking off|on).
+# false = pluginu se odeberou vsechny znacky (UUID) z predmetu a prestane je znacit; bloky se sleduji dal.
+# Pred trvalym odstranenim pluginu spust /purrlog tracking off, jinak se oznacene predmety s ruznym UUID nebudou stackovat.
+tracking-enabled: true

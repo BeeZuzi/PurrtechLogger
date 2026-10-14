@@ -101,6 +101,14 @@ public final class TrackedUnitDao {
         }
     }
 
+    /**
+     * Tracking was switched off and the tags are being removed from every item: retires every live
+     * item unit except REFERENCE masters (a crate may still hold those) in one statement.
+     */
+    public void enqueueRetireItemUnits(String cause) {
+        database.writeQueue().offer(new DbTask.RetireItemUnitsTask(System.currentTimeMillis(), cause));
+    }
+
     /** UUIDs of every unit with this origin (e.g. REFERENCE). Blocking read - off the main thread. */
     public java.util.List<String> findUuidsByOrigin(String origin) throws SQLException {
         MainThreadCheck.assertAsync();

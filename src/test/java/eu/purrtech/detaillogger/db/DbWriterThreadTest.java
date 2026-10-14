@@ -28,6 +28,44 @@ class DbWriterThreadTest {
     }
 
     @Test
+    void retireRetiresLiveItemUnitsButNotReferencesOrBlocks() throws Exception {
+        Logger logger = Logger.getAnonymousLogger();
+        try (Connection c = DriverManager.getConnection("jdbc:sqlite::memory:")) {
+            try (Statement s = c.createStatement()) {
+                s.execute("PRAGMA foreign_keys=ON");
+            }
+            new SchemaMigrator(c, logger).migrate();
+
+            WriteQueue queue = new WriteQueue(1000, logger);
+            queue.offer(new DbTask.UpsertTrackedUnitTask("item-1", 0, "ITEM", "IMPORTED", null, 1, true, null, null));
+            queue.offer(new DbTask.UpsertTrackedUnitTask("item-2", 0, "ITEM", "ISSUED", null, 1, true, null, null));
+            queue.offer(new DbTask.UpsertTrackedUnitTask("master", 0, "ITEM", "REFERENCE", null, 1, true, null, null));
+            queue.offer(new DbTask.UpsertTrackedUnitTask("block-1", 0, "BLOCK", "PLACED", null, 1, true, null, null));
+            queue.offer(new DbTask.RetireItemUnitsTask(99, "TRACKING_DISABLED"));
+
+            DbWriterThread writer = new DbWriterThread(c, queue, logger);
+            writer.start();
+            writer.shutdown();
+
+            java.util.Map<String, Integer> alive = new java.util.HashMap<>();
+            java.util.Map<String, String> cause = new java.util.HashMap<>();
+            try (Statement s = c.createStatement();
+                 ResultSet r = s.executeQuery("select uuid, alive, destroyed_cause from tracked_units")) {
+                while (r.next()) {
+                    alive.put(r.getString(1), r.getInt(2));
+                    cause.put(r.getString(1), r.getString(3));
+                }
+            }
+            assertEquals(4, alive.size());
+            assertEquals(1, alive.get("block-1")); // blocks are untouched
+            assertEquals(1, alive.get("master"));  // a crate may still hold the master
+            assertEquals(0, alive.get("item-1"));
+            assertEquals(0, alive.get("item-2"));
+            assertEquals("TRACKING_DISABLED", cause.get("item-1"));
+        }
+    }
+
+    @Test
     void lineageIsWrittenEvenWhenTheUnitsAreNotInTheDatabase() throws Exception {
         Logger logger = Logger.getAnonymousLogger();
         try (Connection c = DriverManager.getConnection("jdbc:sqlite::memory:")) {

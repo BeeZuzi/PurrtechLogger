@@ -43,12 +43,20 @@ import org.bukkit.permissions.Permission;
 import org.bukkit.permissions.PermissionDefault;
 import org.bukkit.plugin.java.JavaPlugin;
 
+import eu.purrtech.detaillogger.tracking.TagStripper;
+import eu.purrtech.detaillogger.tracking.listener.TagStripListener;
 import java.io.File;
 
 public final class DetailLoggerPlugin extends JavaPlugin {
 
     private Database database;
     private TemplateRegistry templateRegistry;
+    private LedgerService ledgerService;
+    private TagStripper tagStripper;
+    private TagStripListener tagStripListener;
+    /** Everything that tags/tracks items - unregistered while tracking is switched off. */
+    private final java.util.List<org.bukkit.event.Listener> trackingListeners = new java.util.ArrayList<>();
+    private boolean trackingEnabled = true;
 
     @Override
     public void onEnable() {
@@ -92,17 +100,17 @@ public final class DetailLoggerPlugin extends JavaPlugin {
         // online will re-fire PlayerJoinEvent once the server (and thus this listener) restarts.
         playerDao.enqueueResetAllOffline();
 
-        getServer().getPluginManager().registerEvents(new PlayerJoinScanListener(itemTracking), this);
+        trackingListeners.add(new PlayerJoinScanListener(itemTracking));
         getServer().getPluginManager().registerEvents(new PlayerPresenceListener(playerDirectory), this);
-        getServer().getPluginManager().registerEvents(new ItemLifecycleListener(itemTracking), this);
-        getServer().getPluginManager().registerEvents(new ItemDestructionListener(itemTracking), this);
-        getServer().getPluginManager().registerEvents(new ContainerListener(itemTracking, this), this);
-        getServer().getPluginManager().registerEvents(new ShulkerNestingListener(itemTracking), this);
-        getServer().getPluginManager().registerEvents(new ItemTransformListener(itemTracking, this), this);
-        LedgerService ledgerService = new LedgerService(itemTracking, templateRegistry, new LedgerDao(database),
+        trackingListeners.add(new ItemLifecycleListener(itemTracking));
+        trackingListeners.add(new ItemDestructionListener(itemTracking));
+        trackingListeners.add(new ContainerListener(itemTracking, this));
+        trackingListeners.add(new ShulkerNestingListener(itemTracking));
+        trackingListeners.add(new ItemTransformListener(itemTracking, this));
+        ledgerService = new LedgerService(itemTracking, templateRegistry, new LedgerDao(database),
                 dupeAlertDao, this);
-        getServer().getPluginManager().registerEvents(new LedgerListener(ledgerService, this), this);
-        getServer().getPluginManager().registerEvents(new CommandVanishListener(itemTracking, this), this);
+        trackingListeners.add(new LedgerListener(ledgerService, this));
+        trackingListeners.add(new CommandVanishListener(itemTracking, this));
         // Reference items and "vanished after a command" units live in the DB; load them for the
         // main-thread fast paths (async: the reads must not run on the server thread).
         Bukkit.getScheduler().runTaskAsynchronously(this, () -> {
@@ -118,10 +126,20 @@ public final class DetailLoggerPlugin extends JavaPlugin {
             }
         });
         InventoryTagListener inventoryTagger = new InventoryTagListener(itemTracking, this);
-        getServer().getPluginManager().registerEvents(inventoryTagger, this);
-        getServer().getPluginManager().registerEvents(new ShulkerSessionListener(itemTracking, itemTag, eventDao), this);
+        trackingListeners.add(inventoryTagger);
+        trackingListeners.add(new ShulkerSessionListener(itemTracking, itemTag, eventDao));
         getServer().getPluginManager().registerEvents(new ChunkIndexListener(blockIndex, locationDao, this), this);
         getServer().getPluginManager().registerEvents(new BlockLifecycleListener(blockTracking, entityTag, this), this);
+
+        tagStripper = new TagStripper(itemTag, trackedUnitDao, this);
+        tagStripListener = new TagStripListener(tagStripper, this);
+        trackingEnabled = getConfig().getBoolean("tracking-enabled", true);
+        if (trackingEnabled) {
+            trackingListeners.forEach(l -> getServer().getPluginManager().registerEvents(l, this));
+        } else {
+            getServer().getPluginManager().registerEvents(tagStripListener, this);
+            getLogger().warning("Sledovani predmetu je VYPNUTE (tracking-enabled: false) - /purrlog tracking on");
+        }
 
         AdminGuiService adminGuiService = setupDisplayGuiIntegration(
                 templateDao, eventDao, dupeAlertDao, historyService, playerDirectory, locationDao, lineageDao, itemTracking);
@@ -141,7 +159,38 @@ public final class DetailLoggerPlugin extends JavaPlugin {
 
         // Every 30s: re-derive ground truth from what's physically on online players and
         // cross-check it against the DB - see ReconciliationSweepTask's own docs for scope.
-        Bukkit.getScheduler().runTaskTimer(this, sweepTask::runSweep, 20L * 30, 20L * 30);
+        Bukkit.getScheduler().runTaskTimer(this, () -> {
+            if (trackingEnabled) {
+                sweepTask.runSweep();
+            }
+        }, 20L * 30, 20L * 30);
+    }
+
+    public boolean isTrackingEnabled() {
+        return trackingEnabled;
+    }
+
+    /**
+     * The kill switch. Off: item listeners are unregistered, every reachable tag is stripped and the
+     * item units are retired. On: listeners return; old items get fresh UUIDs as they are met.
+     */
+    public void setTrackingEnabled(boolean enabled, org.bukkit.command.CommandSender sender) {
+        if (enabled == trackingEnabled) {
+            return;
+        }
+        trackingEnabled = enabled;
+        getConfig().set("tracking-enabled", enabled);
+        saveConfig();
+        if (enabled) {
+            org.bukkit.event.HandlerList.unregisterAll(tagStripListener);
+            trackingListeners.forEach(l -> getServer().getPluginManager().registerEvents(l, this));
+            Bukkit.getOnlinePlayers().forEach(ledgerService::initCounts);
+            sender.sendMessage("Sledovani ZAPNUTO. Drive sledovane predmety dostanou nove UUID.");
+        } else {
+            trackingListeners.forEach(org.bukkit.event.HandlerList::unregisterAll);
+            getServer().getPluginManager().registerEvents(tagStripListener, this);
+            tagStripper.stripEverything(sender);
+        }
     }
 
     public eu.purrtech.detaillogger.db.WriteQueue.Stats writeQueueStats() {

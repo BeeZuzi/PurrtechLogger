@@ -115,6 +115,15 @@ public final class PurrLogCommand implements BasicCommand {
             runIssue(sender, args);
             return;
         }
+        if (args.length >= 1 && args[0].equalsIgnoreCase("tracking")) {
+            runTracking(sender, args);
+            return;
+        }
+        if (!plugin.isTrackingEnabled() && args.length >= 1
+                && (args[0].equalsIgnoreCase("reference") || args[0].equalsIgnoreCase("mint"))) {
+            sender.sendMessage("Sledovani je vypnute - nejdriv /purrlog tracking on.");
+            return;
+        }
         if (args.length >= 1 && args[0].equalsIgnoreCase("reference")) {
             runReference(sender, args);
             return;
@@ -264,6 +273,29 @@ public final class PurrLogCommand implements BasicCommand {
         sender.sendMessage("Zapisovac pracoval " + Math.round(100 * busySeconds / seconds) + " % casu.");
     }
 
+    /** {@code /purrlog tracking off|on|status} - kill switch, see {@link DetailLoggerPlugin#setTrackingEnabled}. */
+    private void runTracking(CommandSender sender, String[] args) {
+        String sub = args.length >= 2 ? args[1].toLowerCase() : "status";
+        switch (sub) {
+            case "off" -> {
+                if (!plugin.isTrackingEnabled()) {
+                    sender.sendMessage("Sledovani uz je vypnute.");
+                } else {
+                    plugin.setTrackingEnabled(false, sender);
+                }
+            }
+            case "on" -> {
+                if (plugin.isTrackingEnabled()) {
+                    sender.sendMessage("Sledovani uz bezi.");
+                } else {
+                    plugin.setTrackingEnabled(true, sender);
+                }
+            }
+            default -> sender.sendMessage("Sledovani predmetu: " + (plugin.isTrackingEnabled() ? "ZAPNUTO" : "VYPNUTO")
+                    + " (/purrlog tracking off|on)");
+        }
+    }
+
     /** {@code /purrlog debug on|off|dump|stats|clear} - see {@link StackDebug}. */
     private void runDebug(CommandSender sender, String[] args) {
         String sub = args.length >= 2 ? args[1].toLowerCase() : "";
@@ -307,6 +339,7 @@ public final class PurrLogCommand implements BasicCommand {
         sender.sendMessage("/purrlog players - seznam vsech hracu, co se kdy pripojili");
         sender.sendMessage("/purrlog player <nick|uuid> - profil a UUID konkretniho hrace");
         sender.sendMessage("/purrlog sweep - rucne spusti reconciliation sweep");
+        sender.sendMessage("/purrlog tracking off|on|status - nouzovy vypinac: odebere vsem predmetum znacky a vypne sledovani");
         sender.sendMessage("/purrlog mint <hrac> - oznaci vsechny neoznacene sablonove itemy v jeho inventari");
         sender.sendMessage("/purrlog issue <hrac> <sablona> <pocet> [duvod] - hlaseni vydani ledger itemu (crate/obchod)");
         sender.sendMessage("/purrlog ledger [sablona] - kdo kolik drzi ledger itemu");
