@@ -850,7 +850,10 @@ public final class AdminGuiService implements Listener {
         }
         // Center of the screen, NOT (0,0) - see [[reference-purrtechdisplaygui-coordinate-rules]].
         PageData page = new PageData(CENTER_X, CENTER_Y, 0, new LayersData(layers, GUI_PATH + ":background", GUI_PATH), PageType.NORMAL);
-        DisplayGuiAPI.openMenu(player, Skin.apply(new ScreenPageData(page, buttons, key, MENU_DISTANCE_PIXELS), null));
+        // updateMenu, not openMenu: a click that only changes looks (filter toggle, time mode, picker
+        // check, search) patches the open menu in place - no respawn, no flicker, list keeps its
+        // scroll. A different page (other buttons) still opens fresh.
+        DisplayGuiAPI.updateMenu(player, Skin.apply(new ScreenPageData(page, buttons, key, MENU_DISTANCE_PIXELS), null));
     }
 
     /** Where a region's panel lands: center (page offsets from screen center), size, depth, the
