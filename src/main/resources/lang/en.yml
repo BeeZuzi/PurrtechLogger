@@ -1,0 +1,288 @@
+# PurrTechDetailLogger - English. Chosen in config.yml (language: en). Server-wide: every player sees
+# this language, whatever their own client language is.
+# {0}, {1}, ... = values filled in by the plugin. A missing key falls back to the default copy of this file.
+# Colours: & codes do not work, menus accept § codes (e.g. §7).
+
+common:
+  'on': ON
+  'off': 'OFF'
+  online: ONLINE
+  offline: OFFLINE
+  lookup-failed: Lookup failed, see the console.
+  unknown-item: "No item with UUID '{0}' is known."
+
+tracking:
+  enabled: Tracking ON. Previously tracked items will get new UUIDs.
+  stripping: "Removing tags: players done ({0} pcs), {1} loaded chunks will be processed in batches..."
+  stripped: "Done: removed {0} tags. The units are retired in the DB. Offline players and unloaded chunks are cleaned once they load."
+
+time:
+  ago-seconds: "{0} s ago"
+  ago-minutes: "{0} min ago"
+  ago-hours: "{0} h ago"
+  ago-days: "{0} days ago"
+
+category:
+  GENESIS: Created
+  PLACED: Placed
+  MOVED: Moved
+  MERGED: Merged
+  SEEN: Seen
+  SPAWNED: Spawned
+  DROPPED: Dropped
+  PICKED_UP: Picked up
+  DESTROYED: Destroyed
+  CREATIVE_DUPLICATE: Dupe
+  VIEWED_IN_MENU: In menu
+  SHULKER_OPENED: Shulker
+  VANISHED_BY_COMMAND: Gone (cmd)
+  REAPPEARED_AFTER_COMMAND: Back (cmd)
+  MOVED_BY_COMMAND: Moved (cmd)
+
+calendar:
+  months: [January, February, March, April, May, June, July, August, September, October, November, December]
+  weekdays: [MO, TU, WE, TH, FR, SA, SU]
+
+cmd:
+  help:
+    - "=== PurrTechDetailLogger ==="
+    - "/purrlog gui - open the admin GUI (needs DisplayGUI)"
+    - "/purrlog history <uuid> - history of a tracked unit"
+    - "/purrlog alerts - unresolved dupe alerts"
+    - "/purrlog players - every player who ever joined"
+    - "/purrlog player <name|uuid> - profile and UUID of one player"
+    - "/purrlog sweep - run the reconciliation sweep now"
+    - "/purrlog tracking off|on|status - kill switch: strips the tags from every item and stops tracking"
+    - "/purrlog mint <player> - tags every untagged template item in their inventory"
+    - "/purrlog issue <player> <template> <amount> [reason] - report a ledger item hand-out (crate/shop)"
+    - "/purrlog ledger [template] - who holds how much of a ledger item"
+    - "/purrlog reference [done] - the held item becomes a reference (crate master), copies get new UUIDs"
+    - "/purrlog reload - reloads config, language and templates.yml"
+    - "/purrlog template import <key> - creates a template from the held item"
+    - "/purrlog debug on|off|dump|clear - trace clicks/drags into debug.log; /purrlog debug stats - DB write queue state"
+    - "/purrlog dbtest - checks the DB pipeline by writing and reading a test record"
+  players-only: Only a player can use this command.
+  player-offline: "Player '{0}' is not online."
+  tracking-off-first: Tracking is off - run /purrlog tracking on first.
+  sweep-started: Reconciliation sweep started.
+  issue:
+    not-ledger: "Template '{0}' does not exist or has no mode: ledger. Ledger templates: {1}"
+    bad-amount: The amount must be a positive whole number.
+  reference:
+    done: Reference item setup finished - copies are tagged with new UUIDs from now on.
+    players-only: Players only (hold the item).
+    hold-one: "Hold EXACTLY 1 item that matches a template (not mode: ledger)."
+    created: "Reference item: {0}. Put it into the crate (the item in your hand), then type /purrlog reference done (ends by itself after 10 min)."
+  ledger:
+    list: "Ledger templates: {0} - /purrlog ledger <template>"
+    not-ledger: "Template '{0}' is not in mode: ledger."
+    header: "=== {0} - online players (inventory, no ender chest) ==="
+    nobody: (nobody is holding it)
+  mint:
+    done: "{0}: tagged {1} pcs (new units)."
+  queue:
+    header: "=== DB write queue ==="
+    pending: "Waiting now: {0} (events/locations {1} of {2} = {3} %)"
+    peak: "Most at once since start: {0}"
+    dropped: "Dropped since start: {0}"
+    written: "Written since start: {0} (average {1}/s over the whole uptime)"
+    speed: "Raw write speed: {0}/s (while the writer works) - last batch {1} in {2} ms"
+    busy: "The writer was busy {0} % of the time."
+  tracking:
+    already-off: Tracking is already off.
+    already-on: Tracking is already running.
+    status: "Item tracking: {0} (/purrlog tracking off|on)"
+  debug:
+    'on': "Debug ON - writing to {0}. Do what misbehaves, then /purrlog debug off and send me that file."
+    'off': "Debug off. File: {0}"
+    dumped: The open inventory was written to debug.log.
+    cleared: debug.log deleted.
+    clear-failed: Could not delete debug.log.
+    status: "Debug is {0}. /purrlog debug on|off|dump|stats|clear"
+  players:
+    none: Nobody has joined yet.
+    header: "Players ({0}/{1}):"
+    line: " - [{0}] {1} uuid={2}"
+  player:
+    none: "No player matches '{0}'."
+    state: "State: {0}, first joined {1}"
+  gui:
+    no-displaygui: DisplayGUI is not installed/enabled - the admin GUI is not available.
+  alerts:
+    none: No unresolved dupe alerts.
+    header: "Unresolved alerts ({0}):"
+    line: " - [{0}] {1} uuid={2} observed={3} expected={4} player={5}{6} {7}"
+  history:
+    unit: "template id={0} kind={1} origin={2} alive={3}"
+    destroyed: "destroyed: {0} at {1}"
+    header: "history ({0}):"
+  reload:
+    loading: Reloading config, language and templates...
+    done: "Done: {0} templates loaded."
+    failed: Reload failed, see the console.
+  template:
+    players-only: Only a player can run this (holding the item that should become a template).
+    empty-hand: You are not holding anything.
+    exists: "A template with key '{0}' already exists."
+    save-failed: "Saving templates.yml failed: {0}"
+    added: "Template '{0}' added (material={1}). Reloading..."
+  dbtest:
+    written: "Wrote test UUID {0}, reading it back..."
+    unit-ok: "tracked_units: OK (origin={0}, alive={1})"
+    unit-missing: "tracked_units: MISSING - the write did not go through"
+    events: "events: {0} record(s)"
+
+chat:
+  cancel-word: cancel
+  click-to-copy: Click to copy
+  prompt-player: "Type the name or UUID of the player in chat (or '{0}')."
+  prompt-picker: "Type the player's name (or part of it) in chat (or '{0}')."
+  input-cancelled: Input cancelled.
+  search-cancelled: Search cancelled.
+  invalid-uuid: "Invalid UUID: {0}"
+  world-not-loaded: "World '{0}' is not loaded."
+  item-location-unknown: The item's location is unknown (or its holder is offline).
+  unknown-player: "No player with UUID '{0}' is known."
+  event-no-item: This event has no item.
+  event-not-found: "Event #{0} not found."
+  event-no-location: This event has no stored location.
+  date-future: That day has not happened yet.
+  date-range: "The date would be out of range (From must be <= To)."
+  prompt-date: "Type a date in chat (e.g. 2026-09-19 or 2026-09-19 14:30:00) - not in the future and matching the other bound (From <= To), or '{0}' to cancel."
+  date-expired: Input timed out, open the calendar again from the events menu.
+  date-invalid: "Invalid date format: '{0}' (use e.g. 2026-09-19 or 2026-09-19 14:30:00)."
+  keyboard-incomplete: "Enter all {0} characters first."
+  keyboard-what-uuid: a UUID (32 hex characters, dashes are fine)
+  keyboard-what-value: "a value ({0} characters, allowed: {1})"
+  keyboard-prompt: "Type {0} in chat, or '{1}'."
+  keyboard-expired: Input timed out, open the keyboard again from the menu.
+  keyboard-invalid: "Invalid value: '{0}' - it must be exactly {1} characters from the allowed set ({2})."
+
+gui:
+  back: Back
+  main-menu: Main menu
+  prev: Previous
+  next: Next
+  done: Done
+  cancel: Cancel
+  teleport: Teleport
+  loading: Loading...
+  none: none
+  unknown: unknown
+  pieces: "{0} pcs"
+  place-unknown: place unknown
+  world-unknown: world unknown
+  main:
+    players: Players
+    search-uuid: Search by UUID
+    alerts: Unresolved alerts
+    close: Close
+    events: All events
+  alerts:
+    found: found
+    none: No unresolved alerts
+  players:
+    search: "Players - search: {0}"
+    count-none: 0 players
+    range: "{0}-{1} of {2}"
+  player:
+    nick: "Name: {0}"
+    online: "State: ONLINE"
+    offline: "State: OFFLINE (last seen {0})"
+    first-join: "First joined: {0}"
+    prior-names: "Previous names: {0}"
+    no-activity: (no activity)
+  item:
+    material: "Material: "
+    amount: "Amount: "
+    enchants: "Enchants: "
+    not-loaded: "Amount and enchants: item not loaded"
+    kind: "Kind: "
+    origin: "Origin: "
+    state: "State: "
+    alive: exists
+    destroyed: destroyed
+    not-in-db: not in the DB
+    genesis: "Created: "
+    duplicate-of: "Duplicate of: "
+    location: "Location: "
+    made-from: Made from
+    turned-into: Turned into
+    lineage-more: "... and {0} more"
+    copy-uuid: Copy UUID
+    history-title: History
+    no-display-name: (no display name)
+    unknown: Unknown item
+  location:
+    unknown: unknown
+    slot: "slot {0}"
+    inventory: "inventory of {0}"
+    ender-chest: "ender chest of {0}"
+    container: container
+    ground: "on the ground {0}"
+    placed-block: "placed block {0}"
+    menu: "menu {0}"
+  events:
+    players-all: "Players: all"
+    players-n: "Players: {0}"
+    time-relative: "Time: X ago"
+    time-date: "Time: date"
+    from: "From: {0}"
+    to: "To: {0}"
+    clear-range: Clear range
+    filter-title: "Filter §7({0} records)"
+    all: All
+  event:
+    title: "Event #{0}"
+    time: "Time: "
+    player: "Player: "
+    place: "Place: "
+    detail: "Detail: "
+    nearby: "Nearby: "
+    nearby-suffix: players (list below)
+    nobody-nearby: "(nobody within {0} blocks)"
+    back: "< Back to events"
+  picker:
+    help: ["Click a player = select", "or unselect.", "Several can be selected."]
+    selected-none: "Selected: nobody (= everyone)"
+    selected-n: "Selected: {0}"
+    search: Search player (chat)
+    searching: "Search: {0}"
+    clear-search: Clear search
+    everyone: All players
+    no-match: (no player matches)
+    empty: (no player records)
+  preview:
+    where: "Where: "
+    events: "Events: "
+    click-shulker: "> Click for the shulker contents"
+    click-detail: "> Click for detail and history"
+    no-item: no item
+    no-item-body: ["This event has", "no item."]
+  shulker:
+    title: "Shulker #{0}"
+    label: "Shulker: "
+    held: opened in hand
+    placed: placed shulker
+    placed-short: placed
+    added: "Added: "
+    removed: "Took: "
+    summary: "Added: {0} pcs  |  Took: {1} pcs"
+    legend: "green = added, red = took, yellow = swapped"
+    unchanged: (contents unchanged)
+    empty-slot: Empty slot
+    line-added: "Slot {0}: added +{1} {2}"
+    line-removed: "Slot {0}: took {1} {2}"
+    line-replaced: "Slot {0}: {1} {2} -> {3} {4}"
+    hover-added: "(added {0})"
+    hover-removed: "(took {0})"
+    hover-replaced: "(was {0} {1})"
+  calendar:
+    manual: Type it in
+  keyboard:
+    backspace: Delete
+    clear: Clear
+    to-chat: To chat
+    confirm: Confirm
+    manual: Type in chat
+    count: "{0}/{1} characters"

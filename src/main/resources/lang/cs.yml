@@ -1,0 +1,288 @@
+# PurrTechDetailLogger - cestina. Vybira se v config.yml (language: cs). Plati pro cely server,
+# vsichni hraci vidi tento jazyk bez ohledu na jazyk sveho klienta.
+# {0}, {1}, ... = hodnoty doplnene pluginem. Chybejici klic se doplni z vychozi verze tohoto souboru.
+# Barvy: & kody nefunguji, v menu jde pouzit §-kod (napr. §7).
+
+common:
+  'on': ZAPNUTO
+  'off': VYPNUTO
+  online: ONLINE
+  offline: OFFLINE
+  lookup-failed: Lookup selhal, viz konzole.
+  unknown-item: "Item s UUID '{0}' neni znam."
+
+tracking:
+  enabled: Sledovani ZAPNUTO. Drive sledovane predmety dostanou nove UUID.
+  stripping: "Odebiram znacky: hraci hotovi ({0} ks), {1} nactenych chunku se zpracuje po davkach..."
+  stripped: "Hotovo: odebrano {0} znacek. Jednotky v DB jsou vyrazene. Hraci offline a nenactene chunky se vycisti, az se nactou."
+
+time:
+  ago-seconds: pred {0} s
+  ago-minutes: pred {0} min
+  ago-hours: pred {0} h
+  ago-days: pred {0} dny
+
+category:
+  GENESIS: Vznik
+  PLACED: Polozeno
+  MOVED: Presun
+  MERGED: Slouceno
+  SEEN: Spatreno
+  SPAWNED: Spawnuto
+  DROPPED: Vyhozeno
+  PICKED_UP: Sebrano
+  DESTROYED: Znicen
+  CREATIVE_DUPLICATE: Dupe
+  VIEWED_IN_MENU: V menu
+  SHULKER_OPENED: Shulker
+  VANISHED_BY_COMMAND: Zmizel cmd
+  REAPPEARED_AFTER_COMMAND: Zpet po cmd
+  MOVED_BY_COMMAND: Presun cmd
+
+calendar:
+  months: [Leden, Unor, Brezen, Duben, Kveten, Cerven, Cervenec, Srpen, Zari, Rijen, Listopad, Prosinec]
+  weekdays: [PO, UT, ST, CT, PA, SO, NE]
+
+cmd:
+  help:
+    - "=== PurrTechDetailLogger ==="
+    - "/purrlog gui - otevri admin GUI (vyzaduje DisplayGUI)"
+    - "/purrlog history <uuid> - historie sledovane jednotky"
+    - "/purrlog alerts - nevyresene dupe alerty"
+    - "/purrlog players - seznam vsech hracu, co se kdy pripojili"
+    - "/purrlog player <nick|uuid> - profil a UUID konkretniho hrace"
+    - "/purrlog sweep - rucne spusti reconciliation sweep"
+    - "/purrlog tracking off|on|status - nouzovy vypinac: odebere vsem predmetum znacky a vypne sledovani"
+    - "/purrlog mint <hrac> - oznaci vsechny neoznacene sablonove itemy v jeho inventari"
+    - "/purrlog issue <hrac> <sablona> <pocet> [duvod] - hlaseni vydani ledger itemu (crate/obchod)"
+    - "/purrlog ledger [sablona] - kdo kolik drzi ledger itemu"
+    - "/purrlog reference [done] - drzeny item se stane referencnim (vzor pro crate), kopie dostanou nova UUID"
+    - "/purrlog reload - znovu nacte config, jazyk a templates.yml"
+    - "/purrlog template import <klic> - vytvori sablonu z drzeneho itemu"
+    - "/purrlog debug on|off|dump|clear - trace klikani/dragu do debug.log; /purrlog debug stats - stav fronty zapisu do DB"
+    - "/purrlog dbtest - overi DB potrubi zapisem/ctenim testovaciho zaznamu"
+  players-only: Tento prikaz muze pouzit jen hrac.
+  player-offline: "Hrac '{0}' neni online."
+  tracking-off-first: Sledovani je vypnute - nejdriv /purrlog tracking on.
+  sweep-started: Reconciliation sweep spusten.
+  issue:
+    not-ledger: "Sablona '{0}' neexistuje nebo nema mode: ledger. Ledger sablony: {1}"
+    bad-amount: Pocet musi byt kladne cele cislo.
+  reference:
+    done: Nastaveni referencniho itemu ukonceno - kopie se od ted oznacuji novymi UUID.
+    players-only: Jen pro hrace (drz item v ruce).
+    hold-one: "Drz v ruce PRESNE 1 kus itemu, ktery odpovida sablone (bez mode: ledger)."
+    created: "Referencni item: {0}. Uloz ho do crate (ten item v ruce), pak napis /purrlog reference done (jinak se sam ukonci za 10 min)."
+  ledger:
+    list: "Ledger sablony: {0} - /purrlog ledger <sablona>"
+    not-ledger: "Sablona '{0}' neni v mode: ledger."
+    header: "=== {0} - online hraci (inventar, bez ender chestu) ==="
+    nobody: (nikdo to u sebe nema)
+  mint:
+    done: "{0}: oznaceno {1} ks (nove jednotky)."
+  queue:
+    header: "=== Fronta zapisu do DB ==="
+    pending: "Ceka ted: {0} (z toho udalosti/polohy {1} z {2} = {3} %)"
+    peak: "Nejvic naraz od startu: {0}"
+    dropped: "Zahozeno od startu: {0}"
+    written: "Zapsano od startu: {0} (prumer {1}/s behem celeho provozu)"
+    speed: "Rychlost samotneho zapisu: {0}/s (kdyz zapisovac pracuje) - posledni davka {1} za {2} ms"
+    busy: "Zapisovac pracoval {0} % casu."
+  tracking:
+    already-off: Sledovani uz je vypnute.
+    already-on: Sledovani uz bezi.
+    status: "Sledovani predmetu: {0} (/purrlog tracking off|on)"
+  debug:
+    'on': "Debug ZAPNUT - zapisuje se do {0}. Udelej to, co zlobi, pak /purrlog debug off a posli mi ten soubor."
+    'off': "Debug vypnut. Soubor: {0}"
+    dumped: Obsah otevreneho inventare zapsan do debug.log.
+    cleared: debug.log smazan.
+    clear-failed: debug.log se nepodarilo smazat.
+    status: "Debug je {0}. /purrlog debug on|off|dump|stats|clear"
+  players:
+    none: Zatim se nikdo nepripojil.
+    header: "Hraci ({0}/{1}):"
+    line: " - [{0}] {1} uuid={2}"
+  player:
+    none: "Zadny hrac neodpovida '{0}'."
+    state: "Stav: {0}, prvni pripojeni {1}"
+  gui:
+    no-displaygui: DisplayGUI neni nainstalovane/aktivni - admin GUI neni k dispozici.
+  alerts:
+    none: Zadne nevyresene dupe alerty.
+    header: "Nevyresene alerty ({0}):"
+    line: " - [{0}] {1} uuid={2} nalezeno={3} ocekavano={4} hrac={5}{6} {7}"
+  history:
+    unit: "sablona id={0} druh={1} puvod={2} existuje={3}"
+    destroyed: "znicen: {0} v {1}"
+    header: "historie ({0}):"
+  reload:
+    loading: Nacitam config, jazyk a sablony...
+    done: "Hotovo: {0} sablon nacteno."
+    failed: Reload selhal, viz konzole.
+  template:
+    players-only: Tento prikaz musi spustit hrac (drzi item v ruce, ktery se ma stat sablonou).
+    empty-hand: V ruce nic nedrzis.
+    exists: "Sablona s klicem '{0}' uz existuje."
+    save-failed: "Ulozeni templates.yml selhalo: {0}"
+    added: "Sablona '{0}' pridana (material={1}). Spoustim reload..."
+  dbtest:
+    written: "Zapsano testovaci UUID {0}, ctu zpet..."
+    unit-ok: "tracked_units: OK (origin={0}, alive={1})"
+    unit-missing: "tracked_units: CHYBI - zapis se nepropsal"
+    events: "events: {0} zaznam(u)"
+
+chat:
+  cancel-word: zrusit
+  click-to-copy: Klikni pro zkopirovani
+  prompt-player: "Napis do chatu nick nebo UUID hledaneho hrace (nebo '{0}')."
+  prompt-picker: "Napis do chatu jmeno (nebo jeho cast) hledaneho hrace (nebo '{0}')."
+  input-cancelled: Zadavani zruseno.
+  search-cancelled: Hledani zruseno.
+  invalid-uuid: "Neplatne UUID: {0}"
+  world-not-loaded: "Svet '{0}' neni nacteny."
+  item-location-unknown: Poloha itemu neni znama (nebo drzitel neni online).
+  unknown-player: "Hrac s UUID '{0}' neni znam."
+  event-no-item: Tento event neobsahuje zadny item.
+  event-not-found: "Udalost #{0} nenalezena."
+  event-no-location: Tato udalost nema ulozenou polohu.
+  date-future: Tento den jeste neprobehl.
+  date-range: "Datum by bylo mimo platny rozsah (Od musi byt <= Do)."
+  prompt-date: "Napis do chatu datum (napr. 2026-09-19 nebo 2026-09-19 14:30:00) - nesmi byt v budoucnu a musi sedet s druhym ohranicenim (Od <= Do), nebo '{0}' pro zruseni."
+  date-expired: Zadavani vyprselo, otevri kalendar znovu z menu udalosti.
+  date-invalid: "Neplatny format data: '{0}' (pouzij napr. 2026-09-19 nebo 2026-09-19 14:30:00)."
+  keyboard-incomplete: "Nejdriv zadej vsech {0} znaku."
+  keyboard-what-uuid: UUID (32 hex znaku, pomlcky nevadi)
+  keyboard-what-value: "hodnotu ({0} znaku, povolene: {1})"
+  keyboard-prompt: "Napis do chatu {0} nebo '{1}'."
+  keyboard-expired: Zadavani vyprselo, otevri klavesnici znovu z menu.
+  keyboard-invalid: "Neplatna hodnota: '{0}' - musi mit presne {1} znaku z povolene sady ({2})."
+
+gui:
+  back: Zpet
+  main-menu: Hlavni menu
+  prev: Predchozi
+  next: Dalsi
+  done: Hotovo
+  cancel: Zrusit
+  teleport: Teleportovat
+  loading: Nacitam...
+  none: zadne
+  unknown: nezname
+  pieces: "{0} ks"
+  place-unknown: misto nezname
+  world-unknown: svet neznamy
+  main:
+    players: Hraci
+    search-uuid: Hledat podle UUID
+    alerts: Nevyresene alerty
+    close: Zavrit
+    events: Vsechny udalosti
+  alerts:
+    found: nalezeno
+    none: Zadne nevyresene alerty
+  players:
+    search: "Hraci - hledani: {0}"
+    count-none: 0 hracu
+    range: "{0}-{1} z {2}"
+  player:
+    nick: "Nick: {0}"
+    online: "Stav: ONLINE"
+    offline: "Stav: OFFLINE (naposledy {0})"
+    first-join: "Prvni pripojeni: {0}"
+    prior-names: "Predchozi nicky: {0}"
+    no-activity: (zadna aktivita)
+  item:
+    material: "Material: "
+    amount: "Mnozstvi: "
+    enchants: "Enchanty: "
+    not-loaded: "Mnozstvi a enchanty: item neni nacteny"
+    kind: "Druh: "
+    origin: "Puvod: "
+    state: "Stav: "
+    alive: existuje
+    destroyed: znicen
+    not-in-db: neni v DB
+    genesis: "Vznik: "
+    duplicate-of: "Duplikat z: "
+    location: "Poloha: "
+    made-from: Vznikl z
+    turned-into: Promenen na
+    lineage-more: "... a dalsich {0}"
+    copy-uuid: Kopirovat UUID
+    history-title: Historie
+    no-display-name: (bez display name)
+    unknown: Neznamy item
+  location:
+    unknown: neznama
+    slot: "slot {0}"
+    inventory: "inventar {0}"
+    ender-chest: "ender chest {0}"
+    container: kontejner
+    ground: "na zemi {0}"
+    placed-block: "polozeny blok {0}"
+    menu: "menu {0}"
+  events:
+    players-all: "Hraci: vsichni"
+    players-n: "Hraci: {0}"
+    time-relative: "Cas: pred X"
+    time-date: "Cas: datum"
+    from: "Od: {0}"
+    to: "Do: {0}"
+    clear-range: Zrusit rozsah
+    filter-title: "Filtr §7({0} zaznamu)"
+    all: Vse
+  event:
+    title: "Udalost #{0}"
+    time: "Cas: "
+    player: "Hrac: "
+    place: "Misto: "
+    detail: "Detail: "
+    nearby: "V okoli: "
+    nearby-suffix: hracu (seznam nize)
+    nobody-nearby: "(nikdo v okoli {0} bloku)"
+    back: "< Zpet na udalosti"
+  picker:
+    help: ["Klik na hrace = vybrat", "nebo zrusit vyber.", "Lze vybrat vice hracu."]
+    selected-none: "Vybrano: nikdo (= vsichni)"
+    selected-n: "Vybrano: {0}"
+    search: Hledat hrace (chat)
+    searching: "Hledat: {0}"
+    clear-search: Zrusit hledani
+    everyone: Vsichni hraci
+    no-match: (zadny hrac neodpovida)
+    empty: (zadne zaznamy o hracich)
+  preview:
+    where: "Kde: "
+    events: "Udalosti: "
+    click-shulker: "> Klikni pro obsah shulkeru"
+    click-detail: "> Klikni pro detail a historii"
+    no-item: bez itemu
+    no-item-body: ["Tento event neobsahuje", "zadny item."]
+  shulker:
+    title: "Shulker #{0}"
+    label: "Shulker: "
+    held: otevren v ruce
+    placed: polozeny shulker
+    placed-short: polozeny
+    added: "Pridal: "
+    removed: "Vzal: "
+    summary: "Pridal: {0} ks  |  Vzal: {1} ks"
+    legend: "zelena = pridal, cervena = vzal, zluta = vymenil"
+    unchanged: (obsah se nezmenil)
+    empty-slot: Prazdny slot
+    line-added: "Slot {0}: pridal +{1} {2}"
+    line-removed: "Slot {0}: vzal {1} {2}"
+    line-replaced: "Slot {0}: {1} {2} -> {3} {4}"
+    hover-added: "(pridal {0})"
+    hover-removed: "(vzal {0})"
+    hover-replaced: "(driv {0} {1})"
+  calendar:
+    manual: Napsat rucne
+  keyboard:
+    backspace: Smazat
+    clear: Vymazat
+    to-chat: Do chatu
+    confirm: Potvrdit
+    manual: Napsat do chatu
+    count: "{0}/{1} znaku"

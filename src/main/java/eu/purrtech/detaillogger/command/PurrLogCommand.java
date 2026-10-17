@@ -10,6 +10,7 @@ import eu.purrtech.detaillogger.db.WriteQueue;
 import eu.purrtech.detaillogger.db.dao.TrackedUnitDao;
 import eu.purrtech.detaillogger.db.dao.TrackedUnitRecord;
 import eu.purrtech.detaillogger.gui.AdminGuiService;
+import eu.purrtech.detaillogger.lang.Lang;
 import eu.purrtech.detaillogger.template.TemplateRegistry;
 import eu.purrtech.detaillogger.tracking.HistoryService;
 import eu.purrtech.detaillogger.tracking.ItemTrackingService;
@@ -121,7 +122,7 @@ public final class PurrLogCommand implements BasicCommand {
         }
         if (!plugin.isTrackingEnabled() && args.length >= 1
                 && (args[0].equalsIgnoreCase("reference") || args[0].equalsIgnoreCase("mint"))) {
-            sender.sendMessage("Sledovani je vypnute - nejdriv /purrlog tracking on.");
+            sender.sendMessage(Lang.t("cmd.tracking-off-first"));
             return;
         }
         if (args.length >= 1 && args[0].equalsIgnoreCase("reference")) {
@@ -138,7 +139,7 @@ public final class PurrLogCommand implements BasicCommand {
         }
         if (args.length == 1 && args[0].equalsIgnoreCase("sweep")) {
             sweepTask.runSweep();
-            sender.sendMessage("Reconciliation sweep spusten.");
+            sender.sendMessage(Lang.t("cmd.sweep-started"));
             return;
         }
         if (args.length == 1 && args[0].equalsIgnoreCase("gui")) {
@@ -172,12 +173,11 @@ public final class PurrLogCommand implements BasicCommand {
     private void runIssue(CommandSender sender, String[] args) {
         org.bukkit.entity.Player target = Bukkit.getPlayerExact(args[1]);
         if (target == null) {
-            sender.sendMessage("Hrac '" + args[1] + "' neni online.");
+            sender.sendMessage(Lang.t("cmd.player-offline", args[1]));
             return;
         }
         if (!ledgerService.isLedgerTemplate(args[2])) {
-            sender.sendMessage("Sablona '" + args[2] + "' neexistuje nebo nema mode: ledger. Ledger sablony: "
-                    + String.join(", ", ledgerService.ledgerTemplateKeys()));
+            sender.sendMessage(Lang.t("cmd.issue.not-ledger", args[2], String.join(", ", ledgerService.ledgerTemplateKeys())));
             return;
         }
         int amount;
@@ -187,7 +187,7 @@ public final class PurrLogCommand implements BasicCommand {
             amount = 0;
         }
         if (amount <= 0) {
-            sender.sendMessage("Pocet musi byt kladne cele cislo.");
+            sender.sendMessage(Lang.t("cmd.issue.bad-amount"));
             return;
         }
         String reason = args.length > 4 ? String.join(" ", java.util.Arrays.copyOfRange(args, 4, args.length)) : sender.getName();
@@ -203,39 +203,37 @@ public final class PurrLogCommand implements BasicCommand {
     private void runReference(CommandSender sender, String[] args) {
         if (args.length >= 2 && args[1].equalsIgnoreCase("done")) {
             itemTracking.closeReferenceSessions();
-            sender.sendMessage("Nastaveni referencniho itemu ukonceno - kopie se od ted oznacuji novymi UUID.");
+            sender.sendMessage(Lang.t("cmd.reference.done"));
             return;
         }
         if (!(sender instanceof org.bukkit.entity.Player player)) {
-            sender.sendMessage("Jen pro hrace (drz item v ruce).");
+            sender.sendMessage(Lang.t("cmd.reference.players-only"));
             return;
         }
         org.bukkit.inventory.ItemStack held = player.getInventory().getItemInMainHand();
         var reference = itemTracking.createReference(held, player.getLocation(), player);
         if (reference.isEmpty()) {
-            sender.sendMessage("Drz v ruce PRESNE 1 kus itemu, ktery odpovida sablone (bez mode: ledger).");
+            sender.sendMessage(Lang.t("cmd.reference.hold-one"));
             return;
         }
         player.getInventory().setItemInMainHand(held);
-        sender.sendMessage("Referencni item: " + reference.get() + ". Uloz ho do crate (ten item v ruce), "
-                + "pak napis /purrlog reference done (jinak se sam ukonci za 10 min).");
+        sender.sendMessage(Lang.t("cmd.reference.created", reference.get()));
     }
 
     /** {@code /purrlog ledger [sablona]}: who holds how much of a ledger item, or the list of ledger items. */
     private void runLedger(CommandSender sender, String[] args) {
         if (args.length < 2) {
-            sender.sendMessage("Ledger sablony: " + String.join(", ", ledgerService.ledgerTemplateKeys())
-                    + " - /purrlog ledger <sablona>");
+            sender.sendMessage(Lang.t("cmd.ledger.list", String.join(", ", ledgerService.ledgerTemplateKeys())));
             return;
         }
         if (!ledgerService.isLedgerTemplate(args[1])) {
-            sender.sendMessage("Sablona '" + args[1] + "' neni v mode: ledger.");
+            sender.sendMessage(Lang.t("cmd.ledger.not-ledger", args[1]));
             return;
         }
         var holders = ledgerService.topHolders(args[1]);
-        sender.sendMessage("=== " + args[1] + " - online hraci (inventar, bez ender chestu) ===");
+        sender.sendMessage(Lang.t("cmd.ledger.header", args[1]));
         if (holders.isEmpty()) {
-            sender.sendMessage("(nikdo to u sebe nema)");
+            sender.sendMessage(Lang.t("cmd.ledger.nobody"));
         }
         holders.stream().limit(15).forEach(e -> sender.sendMessage(" " + e.getKey() + ": " + e.getValue()));
     }
@@ -249,11 +247,11 @@ public final class PurrLogCommand implements BasicCommand {
     private void runMint(CommandSender sender, String playerName) {
         org.bukkit.entity.Player target = Bukkit.getPlayerExact(playerName);
         if (target == null) {
-            sender.sendMessage("Hrac '" + playerName + "' neni online.");
+            sender.sendMessage(Lang.t("cmd.player-offline", playerName));
             return;
         }
         int created = inventoryTagger.tagInventory(target);
-        sender.sendMessage(target.getName() + ": oznaceno " + created + " ks (nove jednotky).");
+        sender.sendMessage(Lang.t("cmd.mint.done", target.getName(), created));
     }
 
     /** {@code /purrlog debug stats}: is the DB write queue the bottleneck, or the disk? */
@@ -261,16 +259,14 @@ public final class PurrLogCommand implements BasicCommand {
         WriteQueue.Stats s = plugin.writeQueueStats();
         double seconds = Math.max(1, s.uptimeMillis() / 1000.0);
         double busySeconds = Math.max(0.001, s.writeMillisTotal() / 1000.0);
-        sender.sendMessage("=== Fronta zapisu do DB ===");
-        sender.sendMessage("Ceka ted: " + s.pending() + " (z toho udalosti/polohy " + s.bulkPending() + " z "
-                + s.bulkCapacity() + " = " + (100L * s.bulkPending() / Math.max(1, s.bulkCapacity())) + " %)");
-        sender.sendMessage("Nejvic naraz od startu: " + s.peakPending());
-        sender.sendMessage("Zahozeno od startu: " + s.droppedTotal());
-        sender.sendMessage("Zapsano od startu: " + s.writtenTotal() + " (prumer "
-                + Math.round(s.writtenTotal() / seconds) + "/s behem celeho provozu)");
-        sender.sendMessage("Rychlost samotneho zapisu: " + Math.round(s.writtenTotal() / busySeconds)
-                + "/s (kdyz zapisovac pracuje) - posledni davka " + s.lastBatchTasks() + " za " + s.lastBatchMillis() + " ms");
-        sender.sendMessage("Zapisovac pracoval " + Math.round(100 * busySeconds / seconds) + " % casu.");
+        sender.sendMessage(Lang.t("cmd.queue.header"));
+        sender.sendMessage(Lang.t("cmd.queue.pending", s.pending(), s.bulkPending(), s.bulkCapacity(),
+                100L * s.bulkPending() / Math.max(1, s.bulkCapacity())));
+        sender.sendMessage(Lang.t("cmd.queue.peak", s.peakPending()));
+        sender.sendMessage(Lang.t("cmd.queue.dropped", s.droppedTotal()));
+        sender.sendMessage(Lang.t("cmd.queue.written", s.writtenTotal(), Math.round(s.writtenTotal() / seconds)));
+        sender.sendMessage(Lang.t("cmd.queue.speed", Math.round(s.writtenTotal() / busySeconds), s.lastBatchTasks(), s.lastBatchMillis()));
+        sender.sendMessage(Lang.t("cmd.queue.busy", Math.round(100 * busySeconds / seconds)));
     }
 
     /** {@code /purrlog tracking off|on|status} - kill switch, see {@link DetailLoggerPlugin#setTrackingEnabled}. */
@@ -279,20 +275,20 @@ public final class PurrLogCommand implements BasicCommand {
         switch (sub) {
             case "off" -> {
                 if (!plugin.isTrackingEnabled()) {
-                    sender.sendMessage("Sledovani uz je vypnute.");
+                    sender.sendMessage(Lang.t("cmd.tracking.already-off"));
                 } else {
                     plugin.setTrackingEnabled(false, sender);
                 }
             }
             case "on" -> {
                 if (plugin.isTrackingEnabled()) {
-                    sender.sendMessage("Sledovani uz bezi.");
+                    sender.sendMessage(Lang.t("cmd.tracking.already-on"));
                 } else {
                     plugin.setTrackingEnabled(true, sender);
                 }
             }
-            default -> sender.sendMessage("Sledovani predmetu: " + (plugin.isTrackingEnabled() ? "ZAPNUTO" : "VYPNUTO")
-                    + " (/purrlog tracking off|on)");
+            default -> sender.sendMessage(Lang.t("cmd.tracking.status",
+                    Lang.t(plugin.isTrackingEnabled() ? "common.on" : "common.off")));
         }
     }
 
@@ -302,51 +298,35 @@ public final class PurrLogCommand implements BasicCommand {
         switch (sub) {
             case "on" -> {
                 StackDebug.setEnabled(true);
-                sender.sendMessage("Debug ZAPNUT - zapisuje se do " + StackDebug.file().getPath()
-                        + ". Udelej to, co zlobi, pak /purrlog debug off a posli mi ten soubor.");
+                sender.sendMessage(Lang.t("cmd.debug.on", StackDebug.file().getPath()));
             }
             case "off" -> {
                 StackDebug.setEnabled(false);
-                sender.sendMessage("Debug vypnut. Soubor: " + StackDebug.file().getPath());
+                sender.sendMessage(Lang.t("cmd.debug.off", StackDebug.file().getPath()));
             }
             case "dump" -> {
                 if (!(sender instanceof org.bukkit.entity.Player player)) {
-                    sender.sendMessage("Jen pro hrace.");
+                    sender.sendMessage(Lang.t("cmd.players-only"));
                     return;
                 }
                 boolean was = StackDebug.isEnabled();
                 StackDebug.setEnabled(true);
                 StackDebug.dumpView("DUMP " + player.getName(), player.getOpenInventory());
                 StackDebug.setEnabled(was);
-                sender.sendMessage("Obsah otevreneho inventare zapsan do debug.log.");
+                sender.sendMessage(Lang.t("cmd.debug.dumped"));
             }
             case "stats" -> sendQueueStats(sender);
             case "clear" -> {
                 boolean cleared = StackDebug.file().delete() || !StackDebug.file().exists();
-                sender.sendMessage(cleared ? "debug.log smazan." : "debug.log se nepodarilo smazat.");
+                sender.sendMessage(Lang.t(cleared ? "cmd.debug.cleared" : "cmd.debug.clear-failed"));
             }
-            default -> sender.sendMessage("Debug je " + (StackDebug.isEnabled() ? "ZAPNUTY" : "vypnuty")
-                    + ". /purrlog debug on|off|dump|stats|clear");
+            default -> sender.sendMessage(Lang.t("cmd.debug.status",
+                    Lang.t(StackDebug.isEnabled() ? "common.on" : "common.off")));
         }
     }
 
     private void sendHelp(CommandSender sender) {
-        sender.sendMessage("/purrlog debug on|off|dump|clear - trace klikani/dragu do debug.log; /purrlog debug stats - stav fronty zapisu do DB");
-        sender.sendMessage("=== PurrTechDetailLogger ===");
-        sender.sendMessage("/purrlog gui - otevri admin GUI (vyzaduje DisplayGUI)");
-        sender.sendMessage("/purrlog history <uuid> - historie sledovane jednotky");
-        sender.sendMessage("/purrlog alerts - nevyresene dupe alerty");
-        sender.sendMessage("/purrlog players - seznam vsech hracu, co se kdy pripojili");
-        sender.sendMessage("/purrlog player <nick|uuid> - profil a UUID konkretniho hrace");
-        sender.sendMessage("/purrlog sweep - rucne spusti reconciliation sweep");
-        sender.sendMessage("/purrlog tracking off|on|status - nouzovy vypinac: odebere vsem predmetum znacky a vypne sledovani");
-        sender.sendMessage("/purrlog mint <hrac> - oznaci vsechny neoznacene sablonove itemy v jeho inventari");
-        sender.sendMessage("/purrlog issue <hrac> <sablona> <pocet> [duvod] - hlaseni vydani ledger itemu (crate/obchod)");
-        sender.sendMessage("/purrlog ledger [sablona] - kdo kolik drzi ledger itemu");
-        sender.sendMessage("/purrlog reference [done] - drzeny item se stane referencnim (vzor pro crate), kopie dostanou nova UUID");
-        sender.sendMessage("/purrlog reload - znovu nacte templates.yml");
-        sender.sendMessage("/purrlog template import <klic> - vytvori sablonu z drzeneho itemu");
-        sender.sendMessage("/purrlog dbtest - overi DB potrubi zapisem/ctenim testovaciho zaznamu");
+        Lang.list("cmd.help").forEach(sender::sendMessage);
     }
 
     private void runPlayers(CommandSender sender) {
@@ -356,21 +336,21 @@ public final class PurrLogCommand implements BasicCommand {
                 Bukkit.getScheduler().runTask(plugin, () -> reportPlayers(sender, players));
             } catch (Exception e) {
                 plugin.getLogger().severe("players lookup selhal: " + e);
-                Bukkit.getScheduler().runTask(plugin, () -> sender.sendMessage("Lookup selhal, viz konzole."));
+                Bukkit.getScheduler().runTask(plugin, () -> sender.sendMessage(Lang.t("common.lookup-failed")));
             }
         });
     }
 
     private void reportPlayers(CommandSender sender, List<PlayerRecord> players) {
         if (players.isEmpty()) {
-            sender.sendMessage("Zatim se nikdo nepripojil.");
+            sender.sendMessage(Lang.t("cmd.players.none"));
             return;
         }
         int shown = Math.min(players.size(), 30);
-        sender.sendMessage("Hraci (" + shown + "/" + players.size() + "):");
+        sender.sendMessage(Lang.t("cmd.players.header", shown, players.size()));
         for (PlayerRecord p : players.subList(0, shown)) {
-            sender.sendMessage(" - " + (p.online() ? "[ONLINE] " : "[OFFLINE] ") + p.currentName()
-                    + " uuid=" + p.uuid());
+            sender.sendMessage(Lang.t("cmd.players.line", Lang.t(p.online() ? "common.online" : "common.offline"),
+                    p.currentName(), p.uuid()));
         }
     }
 
@@ -381,31 +361,31 @@ public final class PurrLogCommand implements BasicCommand {
                 Bukkit.getScheduler().runTask(plugin, () -> reportPlayer(sender, query, matches));
             } catch (Exception e) {
                 plugin.getLogger().severe("player lookup selhal: " + e);
-                Bukkit.getScheduler().runTask(plugin, () -> sender.sendMessage("Lookup selhal, viz konzole."));
+                Bukkit.getScheduler().runTask(plugin, () -> sender.sendMessage(Lang.t("common.lookup-failed")));
             }
         });
     }
 
     private void reportPlayer(CommandSender sender, String query, List<PlayerRecord> matches) {
         if (matches.isEmpty()) {
-            sender.sendMessage("Zadny hrac neodpovida '" + query + "'.");
+            sender.sendMessage(Lang.t("cmd.player.none", query));
             return;
         }
         for (PlayerRecord p : matches) {
             sender.sendMessage("=== " + p.currentName() + " ===");
             sender.sendMessage("UUID: " + p.uuid());
-            sender.sendMessage((p.online() ? "Stav: ONLINE" : "Stav: OFFLINE") + ", prvni pripojeni "
-                    + formatTime(p.firstJoinedAt()));
+            sender.sendMessage(Lang.t("cmd.player.state", Lang.t(p.online() ? "common.online" : "common.offline"),
+                    formatTime(p.firstJoinedAt())));
         }
     }
 
     private void runGui(CommandSender sender) {
         if (adminGuiService == null) {
-            sender.sendMessage("DisplayGUI neni nainstalovane/aktivni - admin GUI neni k dispozici.");
+            sender.sendMessage(Lang.t("cmd.gui.no-displaygui"));
             return;
         }
         if (!(sender instanceof Player player)) {
-            sender.sendMessage("Tento prikaz musi spustit hrac.");
+            sender.sendMessage(Lang.t("cmd.players-only"));
             return;
         }
         adminGuiService.openLastPageOrMain(player);
@@ -418,22 +398,21 @@ public final class PurrLogCommand implements BasicCommand {
                 Bukkit.getScheduler().runTask(plugin, () -> reportAlerts(sender, alerts));
             } catch (Exception e) {
                 plugin.getLogger().severe("alerts lookup selhal: " + e);
-                Bukkit.getScheduler().runTask(plugin, () -> sender.sendMessage("Lookup selhal, viz konzole."));
+                Bukkit.getScheduler().runTask(plugin, () -> sender.sendMessage(Lang.t("common.lookup-failed")));
             }
         });
     }
 
     private void reportAlerts(CommandSender sender, List<DupeAlertRecord> alerts) {
         if (alerts.isEmpty()) {
-            sender.sendMessage("Zadne nevyresene dupe alerty.");
+            sender.sendMessage(Lang.t("cmd.alerts.none"));
             return;
         }
-        sender.sendMessage("Nevyresene alerty (" + alerts.size() + "):");
+        sender.sendMessage(Lang.t("cmd.alerts.header", alerts.size()));
         for (DupeAlertRecord a : alerts) {
             String where = a.world() != null ? " @ " + a.world() + " " + a.x() + "," + a.y() + "," + a.z() : "";
-            sender.sendMessage(" - [" + a.severity() + "] " + a.note() + " uuid=" + a.unitUuid()
-                    + " observed=" + a.observedCount() + " expected=" + a.expectedAliveCount()
-                    + " hrac=" + a.playerUuid() + where + " " + formatTime(a.detectedAt()));
+            sender.sendMessage(Lang.t("cmd.alerts.line", a.severity(), a.note(), a.unitUuid(), a.observedCount(),
+                    a.expectedAliveCount(), a.playerUuid(), where, formatTime(a.detectedAt())));
         }
     }
 
@@ -444,25 +423,24 @@ public final class PurrLogCommand implements BasicCommand {
                 Bukkit.getScheduler().runTask(plugin, () -> reportHistory(sender, uuid, found));
             } catch (Exception e) {
                 plugin.getLogger().severe("history lookup selhal: " + e);
-                Bukkit.getScheduler().runTask(plugin, () -> sender.sendMessage("Lookup selhal, viz konzole."));
+                Bukkit.getScheduler().runTask(plugin, () -> sender.sendMessage(Lang.t("common.lookup-failed")));
             }
         });
     }
 
     private void reportHistory(CommandSender sender, String uuid, Optional<HistoryService.UnitHistory> found) {
         if (found.isEmpty()) {
-            sender.sendMessage("Item s UUID '" + uuid + "' neni znam.");
+            sender.sendMessage(Lang.t("common.unknown-item", uuid));
             return;
         }
         TrackedUnitRecord unit = found.get().unit();
         sender.sendMessage("=== " + unit.uuid() + " ===");
-        sender.sendMessage("sablona id=" + unit.templateId() + " kind=" + unit.kind()
-                + " origin=" + unit.origin() + " alive=" + unit.alive());
+        sender.sendMessage(Lang.t("cmd.history.unit", unit.templateId(), unit.kind(), unit.origin(), unit.alive()));
         if (!unit.alive()) {
-            sender.sendMessage("znicen: " + unit.destroyedCause() + " v " + formatTime(unit.destroyedAt()));
+            sender.sendMessage(Lang.t("cmd.history.destroyed", unit.destroyedCause(), formatTime(unit.destroyedAt())));
         }
         List<EventRecord> events = found.get().events();
-        sender.sendMessage("historie (" + events.size() + "):");
+        sender.sendMessage(Lang.t("cmd.history.header", events.size()));
         for (EventRecord e : events) {
             sender.sendMessage(" - " + EventLineFormatter.formatLine(e));
         }
@@ -475,36 +453,37 @@ public final class PurrLogCommand implements BasicCommand {
     private void runReload(CommandSender sender) {
         plugin.reloadConfig();
         plugin.applyWriteQueueConfig();
-        sender.sendMessage("Nacitam sablony...");
+        Lang.load(plugin);
+        sender.sendMessage(Lang.t("cmd.reload.loading"));
         Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
             try {
                 templateRegistry.reloadBlocking();
                 int loaded = templateRegistry.definitions().size();
                 Bukkit.getScheduler().runTask(plugin, () ->
-                        sender.sendMessage("Hotovo: " + loaded + " sablon nacteno."));
+                        sender.sendMessage(Lang.t("cmd.reload.done", loaded)));
             } catch (Exception e) {
                 plugin.getLogger().severe("Reload sablon selhal: " + e);
-                Bukkit.getScheduler().runTask(plugin, () -> sender.sendMessage("Reload selhal, viz konzole."));
+                Bukkit.getScheduler().runTask(plugin, () -> sender.sendMessage(Lang.t("cmd.reload.failed")));
             }
         });
     }
 
     private void runTemplateImport(CommandSender sender, String key) {
         if (!(sender instanceof Player player)) {
-            sender.sendMessage("Tento prikaz musi spustit hrac (drzi item v ruce, ktery se ma stat sablonou).");
+            sender.sendMessage(Lang.t("cmd.template.players-only"));
             return;
         }
 
         ItemStack held = player.getInventory().getItemInMainHand();
         if (held.getType().isAir()) {
-            sender.sendMessage("V ruce nic nedrzis.");
+            sender.sendMessage(Lang.t("cmd.template.empty-hand"));
             return;
         }
 
         YamlConfiguration yaml = YamlConfiguration.loadConfiguration(templatesFile);
         String path = "templates." + key;
         if (yaml.contains(path)) {
-            sender.sendMessage("Sablona s klicem '" + key + "' uz existuje.");
+            sender.sendMessage(Lang.t("cmd.template.exists", key));
             return;
         }
 
@@ -522,11 +501,11 @@ public final class PurrLogCommand implements BasicCommand {
         try {
             yaml.save(templatesFile);
         } catch (IOException e) {
-            sender.sendMessage("Ulozeni templates.yml selhalo: " + e.getMessage());
+            sender.sendMessage(Lang.t("cmd.template.save-failed", e.getMessage()));
             return;
         }
 
-        sender.sendMessage("Sablona '" + key + "' pridana (material=" + held.getType() + "). Spoustim reload...");
+        sender.sendMessage(Lang.t("cmd.template.added", key, held.getType()));
         runReload(sender);
     }
 
@@ -538,17 +517,16 @@ public final class PurrLogCommand implements BasicCommand {
         trackedUnitDao.enqueueUpsert(uuid, 0, "ITEM", "DBTEST", null, now, true, null, null);
         eventDao.enqueue(uuid, "DBTEST_PING", now, "world", 0, 64, 0, null, null);
 
-        sender.sendMessage("Zapsáno testovací UUID " + uuid + ", čtu zpět...");
+        sender.sendMessage(Lang.t("cmd.dbtest.written", uuid));
 
         Bukkit.getScheduler().runTaskLaterAsynchronously(plugin, () -> {
             try {
                 TrackedUnitRecord unit = trackedUnitDao.findByUuid(uuid);
                 List<EventRecord> events = eventDao.findByUnit(uuid);
                 Bukkit.getScheduler().runTask(plugin, () -> {
-                    sender.sendMessage("tracked_units: " + (unit != null
-                            ? "OK (origin=" + unit.origin() + ", alive=" + unit.alive() + ")"
-                            : "CHYBI - zapis se nepropsal"));
-                    sender.sendMessage("events: " + events.size() + " zaznam(u)");
+                    sender.sendMessage(unit != null ? Lang.t("cmd.dbtest.unit-ok", unit.origin(), unit.alive())
+                            : Lang.t("cmd.dbtest.unit-missing"));
+                    sender.sendMessage(Lang.t("cmd.dbtest.events", events.size()));
                 });
             } catch (Exception e) {
                 plugin.getLogger().severe("dbtest selhal: " + e);

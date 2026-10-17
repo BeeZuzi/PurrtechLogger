@@ -4,6 +4,7 @@ import eu.purrtech.detaillogger.db.dao.DupeAlertDao;
 import eu.purrtech.detaillogger.db.dao.DupeAlertRecord;
 import eu.purrtech.detaillogger.db.dao.EventDao;
 import eu.purrtech.detaillogger.db.dao.EventRecord;
+import eu.purrtech.detaillogger.lang.Lang;
 import eu.purrtech.detaillogger.db.dao.LineageDao;
 import eu.purrtech.detaillogger.db.dao.LocationDao;
 import eu.purrtech.detaillogger.db.dao.PlayerRecord;
@@ -141,32 +142,11 @@ public final class AdminGuiService implements Listener {
             "DROPPED", "PICKED_UP", "DESTROYED", "CREATIVE_DUPLICATE", "VIEWED_IN_MENU",
             ShulkerSessionLog.EVENT_TYPE, "VANISHED_BY_COMMAND");
 
-    private static final Map<String, String> CATEGORY_LABELS = Map.ofEntries(
-            Map.entry("GENESIS", "Vznik"),
-            Map.entry("PLACED", "Polozeno"),
-            Map.entry("MOVED", "Presun"),
-            Map.entry("MERGED", "Slouceno"),
-            Map.entry("SEEN", "Spatreno"),
-            Map.entry("SPAWNED", "Spawnuto"),
-            Map.entry("DROPPED", "Vyhozeno"),
-            Map.entry("PICKED_UP", "Sebrano"),
-            Map.entry("DESTROYED", "Znicen"),
-            // Was "Creative dupe" (13 chars) - the one label wide enough to force an oversized grid
-            // step on its own; shortened so the category grid's column width is driven by the more
-            // typical 6-8 char labels instead. See [[reference-purrtechdisplaygui-coordinate-rules]].
-            Map.entry("CREATIVE_DUPLICATE", "Dupe"),
-            Map.entry("VIEWED_IN_MENU", "V menu"),
-            Map.entry(ShulkerSessionLog.EVENT_TYPE, "Shulker"),
-            Map.entry("VANISHED_BY_COMMAND", "Zmizel cmd"),
-            Map.entry("REAPPEARED_AFTER_COMMAND", "Zpet po cmd"),
-            Map.entry("MOVED_BY_COMMAND", "Presun cmd"));
-
-    /** Monday-first weekday header row for {@link #openCalendarPage}, diacritics stripped per the
-     * project's no-diacritics-in-labels convention (Pondeli..Nedele). */
-    private static final List<String> WEEKDAY_HEADERS = List.of("PO", "UT", "ST", "CT", "PA", "SO", "NE");
-    private static final List<String> MONTH_NAMES = List.of(
-            "Leden", "Unor", "Brezen", "Duben", "Kveten", "Cerven",
-            "Cervenec", "Srpen", "Zari", "Rijen", "Listopad", "Prosinec");
+    /** Short label of an event type ("category.<TYPE>" in lang/*.yml); the raw type when not listed. */
+    private static String categoryLabel(String type) {
+        String label = Lang.t("category." + type);
+        return label.equals("category." + type) ? type : label;
+    }
 
     /** Manual-entry fallback for the calendar (see {@link #beginManualDateInput}) - same formats
      * the old chat-only date flow accepted, still validated by {@link #isValidEventsDate}. */
@@ -308,11 +288,11 @@ public final class AdminGuiService implements Listener {
         // in [[reference-purrtechdisplaygui-coordinate-rules]]) instead of sinking into the floor
         // like the first (too-deep, rel y up to 2.55) attempt did.
         List<ButtonData> buttons = new ArrayList<>();
-        buttons.add(navButton("players", cx(0), cy(-0.40), 0.04, "Hraci", e -> openPlayerList(player, 0)));
-        buttons.add(navButton("search", cx(0), cy(-0.05), 0.04, "Hledat podle UUID", e -> openUuidSearchKeyboard(player)));
-        buttons.add(navButton("alerts", cx(0), cy(0.30), 0.05, "Nevyresene alerty", e -> openAlerts(player)));
-        buttons.add(navButton("close", cx(0), cy(0.65), 0.05, "Zavrit", e -> DisplayGuiAPI.closeMenu(player)));
-        buttons.add(navButton("events", cx(0), cy(1.00), 0.05, "Vsechny udalosti", e -> openEventsPage(player)));
+        buttons.add(navButton("players", cx(0), cy(-0.40), 0.04, Lang.t("gui.main.players"), e -> openPlayerList(player, 0)));
+        buttons.add(navButton("search", cx(0), cy(-0.05), 0.04, Lang.t("gui.main.search-uuid"), e -> openUuidSearchKeyboard(player)));
+        buttons.add(navButton("alerts", cx(0), cy(0.30), 0.05, Lang.t("gui.main.alerts"), e -> openAlerts(player)));
+        buttons.add(navButton("close", cx(0), cy(0.65), 0.05, Lang.t("gui.main.close"), e -> DisplayGuiAPI.closeMenu(player)));
+        buttons.add(navButton("events", cx(0), cy(1.00), 0.05, Lang.t("gui.main.events"), e -> openEventsPage(player)));
 
         openScreen(player, buttons, "purrtechlog:main");
     }
@@ -336,13 +316,13 @@ public final class AdminGuiService implements Listener {
         // Menu stays open while typing in chat now - the DisplayGUI menu is world Display/
         // Interaction entities, not a vanilla inventory screen, so it never actually blocked chat
         // input; closing it here just made the menu visibly disappear during entry for no reason.
-        player.sendMessage("Napis do chatu nick nebo UUID hledaneho hrace (nebo 'zrusit').");
+        player.sendMessage(Lang.t("chat.prompt-player", Lang.t("chat.cancel-word")));
     }
 
     /** Player picker's "Hledat hrace": the next chat line filters its list by name (menu stays open). */
     private void beginPickerSearch(Player player) {
         awaitingSearchInput.put(player.getUniqueId(), SearchMode.PICKER);
-        player.sendMessage("Napis do chatu jmeno (nebo jeho cast) hledaneho hrace (nebo 'zrusit').");
+        player.sendMessage(Lang.t("chat.prompt-picker", Lang.t("chat.cancel-word")));
     }
 
     private void applyPickerSearch(Player player, String raw) {
@@ -362,8 +342,8 @@ public final class AdminGuiService implements Listener {
         event.setCancelled(true);
         String raw = PlainTextComponentSerializer.plainText().serialize(event.message()).trim();
         Bukkit.getScheduler().runTask(plugin, () -> {
-            if (raw.equalsIgnoreCase("zrusit")) {
-                player.sendMessage(mode == SearchMode.EVENTS_DATE ? "Zadavani zruseno." : "Hledani zruseno.");
+            if (raw.equalsIgnoreCase(Lang.t("chat.cancel-word")) || raw.equalsIgnoreCase("cancel")) {
+                player.sendMessage(Lang.t(mode == SearchMode.EVENTS_DATE ? "chat.input-cancelled" : "chat.search-cancelled"));
                 return;
             }
             switch (mode) {
@@ -380,7 +360,7 @@ public final class AdminGuiService implements Listener {
         try {
             uuid = UUID.fromString(rawUuid.trim());
         } catch (IllegalArgumentException e) {
-            player.sendMessage("Neplatne UUID: " + rawUuid);
+            player.sendMessage(Lang.t("chat.invalid-uuid", rawUuid));
             return;
         }
         String uuidString = uuid.toString();
@@ -389,7 +369,7 @@ public final class AdminGuiService implements Listener {
             try {
                 Optional<HistoryService.UnitHistory> found = historyService.lookup(uuidString);
                 if (found.isEmpty()) {
-                    Bukkit.getScheduler().runTask(plugin, () -> player.sendMessage("Item s UUID '" + uuidString + "' neni znam."));
+                    Bukkit.getScheduler().runTask(plugin, () -> player.sendMessage(Lang.t("common.unknown-item", uuidString)));
                     return;
                 }
                 String material = templateDao.findMaterialById(found.get().unit().templateId());
@@ -400,7 +380,7 @@ public final class AdminGuiService implements Listener {
                         () -> openDetailPage(player, found.get(), material, location, parents, children));
             } catch (SQLException e) {
                 logger.severe("Admin GUI detail lookup selhal: " + e);
-                Bukkit.getScheduler().runTask(plugin, () -> player.sendMessage("Lookup selhal, viz konzole."));
+                Bukkit.getScheduler().runTask(plugin, () -> player.sendMessage(Lang.t("common.lookup-failed")));
             }
         });
     }
@@ -454,7 +434,7 @@ public final class AdminGuiService implements Listener {
                 .append(net.kyori.adventure.text.Component.text(value, net.kyori.adventure.text.format.NamedTextColor.WHITE)
                         .decorate(net.kyori.adventure.text.format.TextDecoration.UNDERLINED)
                         .clickEvent(net.kyori.adventure.text.event.ClickEvent.copyToClipboard(value))
-                        .hoverEvent(net.kyori.adventure.text.Component.text("Klikni pro zkopirovani"))));
+                        .hoverEvent(net.kyori.adventure.text.Component.text(Lang.t("chat.click-to-copy")))));
     }
 
     /** A recorded block position, or a holder (inventory / ender chest) who is online. */
@@ -469,7 +449,7 @@ public final class AdminGuiService implements Listener {
         if (loc.world() != null && loc.x() != null && loc.y() != null && loc.z() != null) {
             World world = Bukkit.getWorld(loc.world());
             if (world == null) {
-                player.sendMessage("Svet '" + loc.world() + "' neni nacteny.");
+                player.sendMessage(Lang.t("chat.world-not-loaded", loc.world()));
                 return;
             }
             target = new Location(world, loc.x() + 0.5, loc.y(), loc.z() + 0.5);
@@ -478,7 +458,7 @@ public final class AdminGuiService implements Listener {
             if (holder != null) target = holder.getLocation();
         }
         if (target == null) {
-            player.sendMessage("Poloha itemu neni znama (nebo drzitel neni online).");
+            player.sendMessage(Lang.t("chat.item-location-unknown"));
             return;
         }
         DisplayGuiAPI.closeMenu(player);
@@ -498,7 +478,7 @@ public final class AdminGuiService implements Listener {
                     + ", " + formatTime(link.at()) + ")");
         }
         if (links.size() > 3) {
-            lines.add(label + ": ... a dalsich " + (links.size() - 3));
+            lines.add(label + ": " + Lang.t("gui.item.lineage-more", links.size() - 3));
         }
     }
 
@@ -517,26 +497,26 @@ public final class AdminGuiService implements Listener {
         infoLines.add("§6" + itemTitle(live, materialName));
         infoLines.add(MUTED + unit.uuid());
         infoLines.add("");
-        infoLines.add(LABEL + "Material: " + VALUE + (materialName != null ? materialName : "?"));
+        infoLines.add(LABEL + Lang.t("gui.item.material") + VALUE + (materialName != null ? materialName : "?"));
         if (live != null) {
-            infoLines.add(LABEL + "Mnozstvi: " + VALUE + live.getAmount() + " ks");
-            infoLines.add(LABEL + "Enchanty: " + VALUE + formatEnchants(live));
+            infoLines.add(LABEL + Lang.t("gui.item.amount") + VALUE + Lang.t("gui.pieces", live.getAmount()));
+            infoLines.add(LABEL + Lang.t("gui.item.enchants") + VALUE + formatEnchants(live));
         } else {
-            infoLines.add(MUTED + "Mnozstvi/enchanty: item neni nacteny");
+            infoLines.add(MUTED + Lang.t("gui.item.not-loaded"));
         }
-        infoLines.add(LABEL + "Druh: " + VALUE + unit.kind() + LABEL + "  Puvod: " + VALUE + unit.origin());
+        infoLines.add(LABEL + Lang.t("gui.item.kind") + VALUE + unit.kind() + LABEL + "  " + Lang.t("gui.item.origin") + VALUE + unit.origin());
         infoLines.add("");
-        infoLines.add(LABEL + "Stav: " + (unit.alive() ? GOOD + "existuje"
-                : BAD + "znicen " + MUTED + "(" + unit.destroyedCause() + ", " + formatTime(unit.destroyedAt()) + ")"));
-        infoLines.add(LABEL + "Vznik: " + VALUE + formatTime(unit.genesisAt()));
+        infoLines.add(LABEL + Lang.t("gui.item.state") + (unit.alive() ? GOOD + Lang.t("gui.item.alive")
+                : BAD + Lang.t("gui.item.destroyed") + " " + MUTED + "(" + unit.destroyedCause() + ", " + formatTime(unit.destroyedAt()) + ")"));
+        infoLines.add(LABEL + Lang.t("gui.item.genesis") + VALUE + formatTime(unit.genesisAt()));
         if (unit.duplicatedFromUuid() != null) {
-            infoLines.add(BAD + "Duplikat z: " + VALUE + shortUuid(unit.duplicatedFromUuid()));
+            infoLines.add(BAD + Lang.t("gui.item.duplicate-of") + VALUE + shortUuid(unit.duplicatedFromUuid()));
         }
-        infoLines.add(LABEL + "Poloha: " + VALUE + formatUnitLocation(location));
+        infoLines.add(LABEL + Lang.t("gui.item.location") + VALUE + formatUnitLocation(location));
         if (!parents.isEmpty() || !children.isEmpty()) {
             infoLines.add("");
-            addLineageLines(infoLines, LABEL + "Vznikl z" + VALUE, parents);
-            addLineageLines(infoLines, LABEL + "Promenen na" + VALUE, children);
+            addLineageLines(infoLines, LABEL + Lang.t("gui.item.made-from") + VALUE, parents);
+            addLineageLines(infoLines, LABEL + Lang.t("gui.item.turned-into") + VALUE, children);
         }
 
         // History as the same clickable scroll list as the events menu, newest first like there.
@@ -556,17 +536,17 @@ public final class AdminGuiService implements Listener {
         double infoTop = ITEM_INFO_BOTTOM_Y - info.getHeight(); // getHeight() is already in blocks
         buttons.add(itemIconButton(player, cx(ITEM_INFO_COLUMN_X), cy(infoTop - 0.15), 0.05, icon, live, materialName));
         buttons.add(info);
-        buttons.add(navButton("back", cx(ITEM_INFO_COLUMN_X), cy(ITEM_BACK_Y), -0.05, "Zpet", e -> openMainMenu(player)));
+        buttons.add(navButton("back", cx(ITEM_INFO_COLUMN_X), cy(ITEM_BACK_Y), -0.05, Lang.t("gui.back"), e -> openMainMenu(player)));
 
         // Small action buttons right of the card, on the line they act on: copy the source UUID
         // (sent to chat as a click-to-copy text) and teleport to the item's last known place.
         if (unit.duplicatedFromUuid() != null) {
             String source = unit.duplicatedFromUuid();
-            addInfoLineButton(buttons, info, infoLines, "Duplikat z: ", "item-copy-dup", "Kopirovat UUID",
-                    e -> sendCopyable(player, "Duplikat z: ", source));
+            addInfoLineButton(buttons, info, infoLines, Lang.t("gui.item.duplicate-of"), "item-copy-dup", Lang.t("gui.item.copy-uuid"),
+                    e -> sendCopyable(player, Lang.t("gui.item.duplicate-of"), source));
         }
         if (canTeleport(location)) {
-            addInfoLineButton(buttons, info, infoLines, "Poloha: ", "item-teleport", "Teleportovat",
+            addInfoLineButton(buttons, info, infoLines, Lang.t("gui.item.location"), "item-teleport", Lang.t("gui.teleport"),
                     e -> teleportToUnit(player, location));
         }
 
@@ -574,7 +554,7 @@ public final class AdminGuiService implements Listener {
         // reaches around the whole list instead of being cut by a shared box ("rozšíříš to pozadí").
         java.util.function.Predicate<ButtonData> isHistory = b -> b.getId().equals("item-history");
         openScreen(player, buttons, "purrtechlog:detail:" + unit.uuid(),
-                new Region("Historie §7(" + history.events().size() + ")", isHistory, 0f, ITEM_HISTORY_PANEL_PAD_X),
+                new Region(Lang.t("gui.item.history-title") + " §7(" + history.events().size() + ")", isHistory, 0f, ITEM_HISTORY_PANEL_PAD_X),
                 new Region(MAIN_TITLE, isHistory.negate()));
     }
 
@@ -587,7 +567,7 @@ public final class AdminGuiService implements Listener {
                 Bukkit.getScheduler().runTask(plugin, () -> openAlertsPage(player, alerts, materials));
             } catch (SQLException e) {
                 logger.severe("Admin GUI alerts lookup selhal: " + e);
-                Bukkit.getScheduler().runTask(plugin, () -> player.sendMessage("Lookup selhal, viz konzole."));
+                Bukkit.getScheduler().runTask(plugin, () -> player.sendMessage(Lang.t("common.lookup-failed")));
             }
         });
     }
@@ -601,11 +581,11 @@ public final class AdminGuiService implements Listener {
         lastPage.put(player.getUniqueId(), () -> openAlerts(player));
         List<ButtonData> rows = new ArrayList<>();
         for (DupeAlertRecord a : alerts) {
-            String where = a.world() != null ? a.world() + " " + a.x() + " " + a.y() + " " + a.z() : "misto nezname";
+            String where = a.world() != null ? a.world() + " " + a.x() + " " + a.y() + " " + a.z() : Lang.t("gui.place-unknown");
             List<String> lines = List.of(
                     BAD + "[" + a.severity() + "] " + VALUE + (a.note() != null ? a.note() : "dupe")
                             + MUTED + "  " + (a.unitUuid() != null ? shortUuid(a.unitUuid()) : "?"),
-                    MUTED + formatTime(a.detectedAt()) + "  |  " + LABEL + "nalezeno " + VALUE + a.observedCount()
+                    MUTED + formatTime(a.detectedAt()) + "  |  " + LABEL + Lang.t("gui.alerts.found") + " " + VALUE + a.observedCount()
                             + LABEL + "/" + a.expectedAliveCount() + MUTED + "  |  " + where);
             rows.add(eventRowButton("alert-" + a.id(), 0, 0, 0.01, lines, iconFor(materials.get(a.unitUuid())), 0f,
                     e -> {
@@ -619,15 +599,15 @@ public final class AdminGuiService implements Listener {
         double rowStepY = 0.65;
         double bottomRowY = ALERTS_TOP_Y + (ALERTS_VISIBLE_ROWS - 1) * rowStepY;
         if (rows.isEmpty()) {
-            buttons.add(buildStaticText("alerts-empty", cx(0), cy(0), 0.05, List.of(GOOD + "Zadne nevyresene alerty")));
+            buttons.add(buildStaticText("alerts-empty", cx(0), cy(0), 0.05, List.of(GOOD + Lang.t("gui.alerts.none"))));
         } else {
             buttons.add(scrollFrame("alerts", cx(0), cy(bottomRowY), FLAT_LIST_Z, rows,
                     EVENT_ROW_CARD_WIDTH_BLOCKS * PIXELS_PER_BLOCK + HITBOX_PADDING_PX, rowStepY, ALERTS_VISIBLE_ROWS));
         }
-        buttons.add(navButton("back", cx(0), cy(bottomRowY + 0.5), 0.05, "Zpet", e -> openMainMenu(player)));
+        buttons.add(navButton("back", cx(0), cy(bottomRowY + 0.5), 0.05, Lang.t("gui.back"), e -> openMainMenu(player)));
 
         openScreen(player, buttons, "purrtechlog:alerts",
-                new Region("Nevyresene alerty §7(" + alerts.size() + (alerts.size() >= 50 ? "+" : "") + ")", b -> true));
+                new Region(Lang.t("gui.main.alerts") + " §7(" + alerts.size() + (alerts.size() >= 50 ? "+" : "") + ")", b -> true));
     }
 
     /** State of the players menu: the full directory (loaded once per open) plus the live search text. */
@@ -669,7 +649,7 @@ public final class AdminGuiService implements Listener {
                 });
             } catch (SQLException e) {
                 logger.severe("Admin GUI nacteni seznamu hracu selhalo: " + e);
-                Bukkit.getScheduler().runTask(plugin, () -> player.sendMessage("Lookup selhal, viz konzole."));
+                Bukkit.getScheduler().runTask(plugin, () -> player.sendMessage(Lang.t("common.lookup-failed")));
             }
         });
     }
@@ -698,23 +678,23 @@ public final class AdminGuiService implements Listener {
 
         List<ButtonData> buttons = new ArrayList<>();
         buttons.add(infoTextButton(cx(0), cy(-2.1), 0.04, List.of(
-                "Hraci - hledani: " + (s.query.isEmpty() ? "-" : s.query),
-                filtered.isEmpty() ? "0 hracu" : (offset + 1) + "-" + end + " z " + filtered.size())));
+                Lang.t("gui.players.search", s.query.isEmpty() ? "-" : s.query),
+                filtered.isEmpty() ? Lang.t("gui.players.count-none") : Lang.t("gui.players.range", offset + 1, end, filtered.size()))));
 
         double y = -1.3;
         for (PlayerRecord p : filtered.subList(offset, end)) {
-            String label = (p.online() ? "[ONLINE] " : "[OFFLINE] ") + p.currentName();
+            String label = "[" + Lang.t(p.online() ? "common.online" : "common.offline") + "] " + p.currentName();
             buttons.add(navButton("player-" + p.uuid(), cx(-2.6), cy(y), 0.05, label, e -> openPlayerDetail(player, p.uuid())));
             y += 0.45;
         }
         if (offset > 0) {
-            buttons.add(navButton("prev", cx(-3.3), cy(1.25), 0.05, "Predchozi", e -> {
+            buttons.add(navButton("prev", cx(-3.3), cy(1.25), 0.05, Lang.t("gui.prev"), e -> {
                 s.offset = pageStart - PLAYERS_PAGE_SIZE;
                 openPlayersMenu(player);
             }));
         }
         if (end < filtered.size()) {
-            buttons.add(navButton("next", cx(-1.9), cy(1.25), 0.05, "Dalsi", e -> {
+            buttons.add(navButton("next", cx(-1.9), cy(1.25), 0.05, Lang.t("gui.next"), e -> {
                 s.offset = pageStart + PLAYERS_PAGE_SIZE;
                 openPlayersMenu(player);
             }));
@@ -730,18 +710,18 @@ public final class AdminGuiService implements Listener {
                         openPlayersMenu(player);
                     }));
         }
-        buttons.add(navButton("skey-back", cx(0.9), cy(0.9), 0.05, 24, 7, "Smazat", e -> {
+        buttons.add(navButton("skey-back", cx(0.9), cy(0.9), 0.05, 24, 7, Lang.t("gui.keyboard.backspace"), e -> {
             if (!s.query.isEmpty()) s.query.setLength(s.query.length() - 1);
             s.offset = 0;
             openPlayersMenu(player);
         }));
-        buttons.add(navButton("skey-clear", cx(2.1), cy(0.9), 0.05, 24, 7, "Vymazat", e -> {
+        buttons.add(navButton("skey-clear", cx(2.1), cy(0.9), 0.05, 24, 7, Lang.t("gui.keyboard.clear"), e -> {
             s.query.setLength(0);
             s.offset = 0;
             openPlayersMenu(player);
         }));
-        buttons.add(navButton("skey-chat", cx(3.3), cy(0.9), 0.05, 24, 7, "Do chatu", e -> beginPlayerSearch(player)));
-        buttons.add(navButton("back", cx(1.9), cy(1.25), 0.05, "Hlavni menu", e -> {
+        buttons.add(navButton("skey-chat", cx(3.3), cy(0.9), 0.05, 24, 7, Lang.t("gui.keyboard.to-chat"), e -> beginPlayerSearch(player)));
+        buttons.add(navButton("back", cx(1.9), cy(1.25), 0.05, Lang.t("gui.main-menu"), e -> {
             playersSessions.remove(player.getUniqueId());
             openMainMenu(player);
         }));
@@ -755,14 +735,14 @@ public final class AdminGuiService implements Listener {
             try {
                 Optional<PlayerDirectoryService.PlayerProfile> found = playerDirectory.lookupPlayer(targetUuid);
                 if (found.isEmpty()) {
-                    Bukkit.getScheduler().runTask(plugin, () -> player.sendMessage("Hrac s UUID '" + targetUuid + "' neni znam."));
+                    Bukkit.getScheduler().runTask(plugin, () -> player.sendMessage(Lang.t("chat.unknown-player", targetUuid)));
                     return;
                 }
                 PlayerDirectoryService.PlayerActivity activity = playerDirectory.findActivity(targetUuid, 100);
                 Bukkit.getScheduler().runTask(plugin, () -> openPlayerDetailPage(player, found.get(), activity));
             } catch (SQLException e) {
                 logger.severe("Admin GUI detail hrace selhal: " + e);
-                Bukkit.getScheduler().runTask(plugin, () -> player.sendMessage("Lookup selhal, viz konzole."));
+                Bukkit.getScheduler().runTask(plugin, () -> player.sendMessage(Lang.t("common.lookup-failed")));
             }
         });
     }
@@ -772,15 +752,15 @@ public final class AdminGuiService implements Listener {
         PlayerRecord unit = profile.player();
 
         List<String> infoLines = new ArrayList<>();
-        infoLines.add("Nick: " + unit.currentName());
+        infoLines.add(Lang.t("gui.player.nick", unit.currentName()));
         infoLines.add("UUID: " + unit.uuid());
-        infoLines.add(unit.online() ? "Stav: ONLINE" : "Stav: OFFLINE (naposledy " + formatTime(unit.lastSeenAt()) + ")");
-        infoLines.add("Prvni pripojeni: " + formatTime(unit.firstJoinedAt()));
+        infoLines.add(unit.online() ? Lang.t("gui.player.online") : Lang.t("gui.player.offline", formatTime(unit.lastSeenAt())));
+        infoLines.add(Lang.t("gui.player.first-join", formatTime(unit.firstJoinedAt())));
         String priorNames = profile.nameHistory().stream()
                 .map(n -> n.name() + " (" + formatTime(n.changedAt()) + ")")
                 .reduce((a, b) -> a + ", " + b)
-                .orElse("zadne");
-        infoLines.add("Predchozi nicky: " + priorNames);
+                .orElse(Lang.t("gui.none"));
+        infoLines.add(Lang.t("gui.player.prior-names", priorNames));
 
         record ActivityLine(long timestamp, String text) {
         }
@@ -801,8 +781,8 @@ public final class AdminGuiService implements Listener {
 
         List<ButtonData> buttons = new ArrayList<>();
         buttons.add(infoTextButton(cx(0), cy(-1.3), 0.05, infoLines));
-        buttons.add(scrollListButton("activity", cx(0), cy(0.3), 0.05, activityLines, "(zadna aktivita)"));
-        buttons.add(navButton("back", cx(0), cy(1.4), -0.05, "Zpet", e -> openMainMenu(player)));
+        buttons.add(scrollListButton("activity", cx(0), cy(0.3), 0.05, activityLines, Lang.t("gui.player.no-activity")));
+        buttons.add(navButton("back", cx(0), cy(1.4), -0.05, Lang.t("gui.back"), e -> openMainMenu(player)));
 
         openScreen(player, buttons, "purrtechlog:player:" + unit.uuid());
     }
@@ -1148,7 +1128,7 @@ public final class AdminGuiService implements Listener {
         String name = live != null ? itemLabel(live) : null;
         List<String> label = new ArrayList<>();
         label.add(live != null ? live.getType().name() : materialName != null ? materialName : "?");
-        label.add(name != null && !name.equals(live.getType().name()) ? name : "(bez display name)");
+        label.add(name != null && !name.equals(live.getType().name()) ? name : Lang.t("gui.item.no-display-name"));
 
         double sizePixels = ITEM_ICON_BLOCKS * PIXELS_PER_BLOCK;
         return ButtonData.builder()
@@ -1285,7 +1265,7 @@ public final class AdminGuiService implements Listener {
                 Bukkit.getScheduler().runTask(plugin, () -> openEventsListPage(player, filter, events, materials));
             } catch (SQLException e) {
                 logger.severe("Admin GUI nacteni udalosti selhalo: " + e);
-                Bukkit.getScheduler().runTask(plugin, () -> player.sendMessage("Lookup selhal, viz konzole."));
+                Bukkit.getScheduler().runTask(plugin, () -> player.sendMessage(Lang.t("common.lookup-failed")));
             }
         });
     }
@@ -1326,7 +1306,7 @@ public final class AdminGuiService implements Listener {
         // Player filter: a button above the time button that opens a separate menu listing everyone with a
         // record (see openPlayerPicker). Lit green while any player is checked.
         buttons.add(navButton("players-toggle", cx(0), cy(-0.25), 0.05,
-                filter.activePlayers.isEmpty() ? "Hraci: vsichni" : "Hraci: " + filter.activePlayers.size(),
+                filter.activePlayers.isEmpty() ? Lang.t("gui.events.players-all") : Lang.t("gui.events.players-n", filter.activePlayers.size()),
                 e -> {
                     filter.pickerOffset = 0;
                     openPlayerPicker(player);
@@ -1335,27 +1315,27 @@ public final class AdminGuiService implements Listener {
         // Time-display-mode toggle ("určí si hráč ve filtru") + date range, stacked vertically in
         // the center column - opens the small in-game calendar instead of a chat prompt.
         buttons.add(navButton("time-mode", cx(0), cy(0.1), 0.05,
-                filter.relativeTime ? "Cas: pred X" : "Cas: datum", e -> {
+                Lang.t(filter.relativeTime ? "gui.events.time-relative" : "gui.events.time-date"), e -> {
                     filter.relativeTime = !filter.relativeTime;
                     openEventsPage(player);
                 }));
         double dateY = 0.5;
         double dateStepY = 0.35;
         buttons.add(navButton("date-from", cx(0), cy(dateY), 0.05,
-                "Od: " + (filter.from != null ? formatTime(filter.from) : "-"), e -> openEventsCalendar(player, true)));
+                Lang.t("gui.events.from", filter.from != null ? formatTime(filter.from) : "-"), e -> openEventsCalendar(player, true)));
         buttons.add(navButton("date-to", cx(0), cy(dateY + dateStepY), 0.05,
-                "Do: " + (filter.to != null ? formatTime(filter.to) : "-"), e -> openEventsCalendar(player, false)));
+                Lang.t("gui.events.to", filter.to != null ? formatTime(filter.to) : "-"), e -> openEventsCalendar(player, false)));
         double afterDateY = dateY + dateStepY;
         if (filter.from != null || filter.to != null) {
             afterDateY += dateStepY;
-            buttons.add(navButton("date-clear", cx(0), cy(afterDateY), 0.05, "Zrusit rozsah", e -> {
+            buttons.add(navButton("date-clear", cx(0), cy(afterDateY), 0.05, Lang.t("gui.events.clear-range"), e -> {
                 filter.from = null;
                 filter.to = null;
                 openEventsPage(player);
             }));
         }
 
-        buttons.add(navButton("back", cx(0), cy(afterDateY + 0.25), 0.05, "Hlavni menu", e -> openMainMenu(player)));
+        buttons.add(navButton("back", cx(0), cy(afterDateY + 0.25), 0.05, Lang.t("gui.main-menu"), e -> openMainMenu(player)));
 
         String pageKey = "purrtechlog:events:" + (filter.activeCategories.isEmpty()
                 ? "all" : String.join("+", filter.activeCategories))
@@ -1365,7 +1345,7 @@ public final class AdminGuiService implements Listener {
         // cut through them ("zasahuje do seznamu událostí a filtru").
         // The old "Kategorie / Zaznamu" info box is gone ("klidně i odebral"); the count lives in the title.
         java.util.function.Predicate<ButtonData> inFilter = b -> b.getId().startsWith("cat-");
-        String filterTitle = "Filtr §7(" + events.size() + (events.size() >= EVENTS_LIST_LIMIT ? "+" : "") + " zaznamu)";
+        String filterTitle = Lang.t("gui.events.filter-title", events.size() + (events.size() >= EVENTS_LIST_LIMIT ? "+" : ""));
         Region main = new Region(MAIN_TITLE, inFilter.negate().and(b -> !b.getId().equals("events-list")));
         Region filterRegion = new Region(filterTitle, inFilter, EVENTS_FILTER_ROTATION_Y_DEGREES);
         // Slide the turned filter (X and Z together) so its right edge meets the main panel's left
@@ -1399,7 +1379,7 @@ public final class AdminGuiService implements Listener {
             double z = baseZ - along * Math.sin(turn);
             double y = startY + (i / columns) * stepY;
             boolean active = type.equals("ALL") ? filter.activeCategories.isEmpty() : filter.activeCategories.contains(type);
-            String label = type.equals("ALL") ? "Vse" : CATEGORY_LABELS.getOrDefault(type, type);
+            String label = type.equals("ALL") ? Lang.t("gui.events.all") : categoryLabel(type);
             buttons.add(compactButton("cat-" + type, cx(x), cy(y), z, label, e -> toggleCategory(player, type), active,
                     EVENTS_FILTER_ROTATION_Y_DEGREES));
         }
@@ -1636,7 +1616,7 @@ public final class AdminGuiService implements Listener {
                 Bukkit.getScheduler().runTask(plugin, () -> openPlayerPickerPage(player, filter, players));
             } catch (SQLException e) {
                 logger.severe("Admin GUI nacteni hracu selhalo: " + e);
-                Bukkit.getScheduler().runTask(plugin, () -> player.sendMessage("Lookup selhal, viz konzole."));
+                Bukkit.getScheduler().runTask(plugin, () -> player.sendMessage(Lang.t("common.lookup-failed")));
             }
         });
     }
@@ -1693,7 +1673,7 @@ public final class AdminGuiService implements Listener {
         double bottomRowY = PICKER_TOP_Y + (PICKER_VISIBLE_ROWS - 1) * PICKER_ROW_STEP;
         if (rows.isEmpty()) {
             buttons.add(buildStaticText("players-empty", cx(0), cy(0), 0.05,
-                    List.of(query != null ? "(zadny hrac neodpovida)" : "(zadne zaznamy o hracich)")));
+                    List.of(Lang.t(query != null ? "gui.picker.no-match" : "gui.picker.empty"))));
         } else {
             ButtonListScrollButtonData list = scrollFrame("players-list", cx(0), cy(bottomRowY), FLAT_LIST_Z, rows,
                     (PICKER_WIDTH_BLOCKS + 0.2) * PIXELS_PER_BLOCK, PICKER_ROW_STEP, PICKER_VISIBLE_ROWS);
@@ -1703,24 +1683,25 @@ public final class AdminGuiService implements Listener {
         }
 
         // Explanation beside the list (was above it, under the page title).
-        List<String> infoLines = List.of("Klik na hrace = vybrat", "nebo zrusit vyber.", "Lze vybrat vice hracu.", "",
-                filter.activePlayers.isEmpty() ? "Vybrano: nikdo (= vsichni)" : "Vybrano: " + filter.activePlayers.size());
+        List<String> infoLines = new ArrayList<>(Lang.list("gui.picker.help"));
+        infoLines.add("");
+        infoLines.add(filter.activePlayers.isEmpty() ? Lang.t("gui.picker.selected-none") : Lang.t("gui.picker.selected-n", filter.activePlayers.size()));
         buttons.add(buildStaticText("players-info", cx(-PICKER_SIDE_X), cy(PICKER_SIDE_Y), 0.05, infoLines));
         buttons.add(navButton("players-search", cx(PICKER_SIDE_X), cy(PICKER_SIDE_Y - 0.2), 0.05,
-                query != null ? "Hledat: " + filter.pickerQuery : "Hledat hrace (chat)", e -> beginPickerSearch(player), query != null));
+                query != null ? Lang.t("gui.picker.searching", filter.pickerQuery) : Lang.t("gui.picker.search"), e -> beginPickerSearch(player), query != null));
         if (query != null) {
-            buttons.add(navButton("players-search-clear", cx(PICKER_SIDE_X), cy(PICKER_SIDE_Y + 0.2), 0.05, "Zrusit hledani", e -> {
+            buttons.add(navButton("players-search-clear", cx(PICKER_SIDE_X), cy(PICKER_SIDE_Y + 0.2), 0.05, Lang.t("gui.picker.clear-search"), e -> {
                 filter.pickerQuery = null;
                 filter.pickerOffset = 0;
                 openPlayerPicker(player);
             }));
         }
-        buttons.add(navButton("players-clear", cx(-1.3), cy(bottomRowY + 0.55), 0.05, "Vsichni hraci", e -> {
+        buttons.add(navButton("players-clear", cx(-1.3), cy(bottomRowY + 0.55), 0.05, Lang.t("gui.picker.everyone"), e -> {
             filter.activePlayers.clear();
             filter.pickerOffset = 0;
             openPlayerPicker(player);
         }, filter.activePlayers.isEmpty()));
-        buttons.add(navButton("players-done", cx(1.3), cy(bottomRowY + 0.55), 0.05, "Hotovo", e -> {
+        buttons.add(navButton("players-done", cx(1.3), cy(bottomRowY + 0.55), 0.05, Lang.t("gui.done"), e -> {
             filter.pickerOffset = 0;
             filter.pickerQuery = null;
             openEventsPage(player);
@@ -1736,8 +1717,8 @@ public final class AdminGuiService implements Listener {
     private List<String> eventRowLines(EventRecord e, boolean relativeTime) {
         String time = relativeTime ? EventLineFormatter.formatTimeAgo(e.timestamp()) : formatTime(e.timestamp());
         String who = e.playerUuid() != null ? resolvePlayerAlias(e.playerUuid()) : "?";
-        String action = CATEGORY_LABELS.getOrDefault(e.eventType(), e.eventType());
-        String where = e.world() != null ? e.world() + " " + e.x() + " " + e.y() + " " + e.z() : "svet neznamy";
+        String action = categoryLabel(e.eventType());
+        String where = e.world() != null ? e.world() + " " + e.x() + " " + e.y() + " " + e.z() : Lang.t("gui.world-unknown");
         return List.of(
                 actionColour(e.eventType()) + action + MUTED + "  #" + e.id() + LABEL + "  " + who,
                 MUTED + time + "  |  " + where);
@@ -1943,21 +1924,21 @@ public final class AdminGuiService implements Listener {
             String mode = "?";
             if (session != null) {
                 List<ShulkerSessionLog.SlotDiff> diffs = ShulkerSessionLog.diff(session.before(), session.after());
-                mode = ShulkerSessionLog.MODE_HELD.equals(session.mode()) ? "otevren v ruce" : "polozeny shulker";
-                body.add(LABEL + "Kde: " + VALUE + (ev.world() != null ? ev.world() + " " + ev.x() + " " + ev.y() + " " + ev.z() : "?"));
+                mode = ShulkerSessionLog.MODE_HELD.equals(session.mode()) ? Lang.t("gui.shulker.held") : Lang.t("gui.shulker.placed");
+                body.add(LABEL + Lang.t("gui.preview.where") + VALUE + (ev.world() != null ? ev.world() + " " + ev.x() + " " + ev.y() + " " + ev.z() : "?"));
                 body.add("");
-                body.add(LABEL + "Pridal: " + GOOD + ShulkerSessionLog.totalAdded(diffs) + " ks");
-                body.add(LABEL + "Vzal: " + BAD + ShulkerSessionLog.totalRemoved(diffs) + " ks");
+                body.add(LABEL + Lang.t("gui.shulker.added") + GOOD + Lang.t("gui.pieces", ShulkerSessionLog.totalAdded(diffs)));
+                body.add(LABEL + Lang.t("gui.shulker.removed") + BAD + Lang.t("gui.pieces", ShulkerSessionLog.totalRemoved(diffs)));
             }
             body.add("");
-            body.add(HINT + "> Klikni pro obsah shulkeru");
-            applyEventPreview(player, new PreviewContent(rowIcon, VALUE + "Shulker #" + ev.id(), LABEL + mode, body));
+            body.add(HINT + Lang.t("gui.preview.click-shulker"));
+            applyEventPreview(player, new PreviewContent(rowIcon, VALUE + Lang.t("gui.shulker.title", ev.id()), LABEL + mode, body));
             return;
         }
 
         if (ev.unitUuid() == null) {
-            applyEventPreview(player, new PreviewContent(new ItemStack(Material.BARRIER), VALUE + "Udalost #" + ev.id(),
-                    LABEL + "bez itemu", List.of(LABEL + "Tento event neobsahuje", LABEL + "zadny item.")));
+            applyEventPreview(player, new PreviewContent(new ItemStack(Material.BARRIER), VALUE + Lang.t("gui.event.title", ev.id()),
+                    LABEL + Lang.t("gui.preview.no-item"), Lang.list("gui.preview.no-item-body").stream().map(s -> LABEL + s).toList()));
             return;
         }
         String unitUuid = ev.unitUuid();
@@ -1966,7 +1947,7 @@ public final class AdminGuiService implements Listener {
             renderUnitPreview(player, unitUuid, cached, rowIcon);
             return;
         }
-        applyEventPreview(player, new PreviewContent(rowIcon, VALUE + "Nacitam...", MUTED + shortUuid(unitUuid), List.of(" ")));
+        applyEventPreview(player, new PreviewContent(rowIcon, VALUE + Lang.t("gui.loading"), MUTED + shortUuid(unitUuid), List.of(" ")));
         Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
             try {
                 Optional<HistoryService.UnitHistory> history = historyService.lookup(unitUuid);
@@ -1994,25 +1975,25 @@ public final class AdminGuiService implements Listener {
         // split into sections (the item / its existence / where it is) so it reads at a glance
         List<String> body = new ArrayList<>();
         if (live != null) {
-            body.add(LABEL + "Mnozstvi: " + VALUE + live.getAmount() + " ks");
-            body.add(LABEL + "Enchanty: " + VALUE + formatEnchants(live));
+            body.add(LABEL + Lang.t("gui.item.amount") + VALUE + Lang.t("gui.pieces", live.getAmount()));
+            body.add(LABEL + Lang.t("gui.item.enchants") + VALUE + formatEnchants(live));
         } else {
-            body.add(LABEL + "Mnozstvi a enchanty: " + MUTED + "item neni nacteny");
+            body.add(MUTED + Lang.t("gui.item.not-loaded"));
         }
         body.add("");
         TrackedUnitRecord unit = data.unit();
         if (unit != null) {
-            body.add(LABEL + "Stav: " + (unit.alive() ? GOOD + "existuje" : BAD + "znicen " + LABEL + "(" + unit.destroyedCause() + ")"));
-            body.add(LABEL + "Vznik: " + VALUE + formatTime(unit.genesisAt()));
-            body.add(LABEL + "Puvod: " + VALUE + unit.origin());
+            body.add(LABEL + Lang.t("gui.item.state") + (unit.alive() ? GOOD + Lang.t("gui.item.alive") : BAD + Lang.t("gui.item.destroyed") + " " + LABEL + "(" + unit.destroyedCause() + ")"));
+            body.add(LABEL + Lang.t("gui.item.genesis") + VALUE + formatTime(unit.genesisAt()));
+            body.add(LABEL + Lang.t("gui.item.origin") + VALUE + unit.origin());
         } else {
-            body.add(LABEL + "Stav: " + BAD + "neni v DB");
+            body.add(LABEL + Lang.t("gui.item.state") + BAD + Lang.t("gui.item.not-in-db"));
         }
         body.add("");
-        body.add(LABEL + "Poloha: " + VALUE + formatUnitLocation(data.location()));
-        body.add(LABEL + "Udalosti: " + VALUE + data.eventCount());
+        body.add(LABEL + Lang.t("gui.item.location") + VALUE + formatUnitLocation(data.location()));
+        body.add(LABEL + Lang.t("gui.preview.events") + VALUE + data.eventCount());
         body.add("");
-        body.add(HINT + "> Klikni pro detail a historii");
+        body.add(HINT + Lang.t("gui.preview.click-detail"));
         applyEventPreview(player, new PreviewContent(live != null ? live : rowIcon, VALUE + itemTitle(live, data.material()),
                 LABEL + (data.material() != null ? data.material() : "?") + "  " + MUTED + shortUuid(unitUuid), body));
     }
@@ -2033,7 +2014,7 @@ public final class AdminGuiService implements Listener {
             }
             return live.getType().name();
         }
-        return material != null ? material : "Neznamy item";
+        return material != null ? material : Lang.t("gui.item.unknown");
     }
 
     private static String formatEnchants(ItemStack item) {
@@ -2042,7 +2023,7 @@ public final class AdminGuiService implements Listener {
             enchants.putAll(stored.getStoredEnchants());
         }
         if (enchants.isEmpty()) {
-            return "zadne";
+            return Lang.t("gui.none");
         }
         List<String> parts = new ArrayList<>();
         enchants.forEach((enchant, level) -> parts.add(enchant.getKey().getKey() + " " + level));
@@ -2051,17 +2032,17 @@ public final class AdminGuiService implements Listener {
 
     private static String formatUnitLocation(UnitLocationRecord loc) {
         if (loc == null) {
-            return "neznama";
+            return Lang.t("gui.location.unknown");
         }
         String coords = loc.world() != null ? loc.world() + " " + loc.x() + " " + loc.y() + " " + loc.z() : "";
-        String slot = loc.slot() != null ? " slot " + loc.slot() : "";
+        String slot = loc.slot() != null ? " " + Lang.t("gui.location.slot", loc.slot()) : "";
         return switch (loc.locationType()) {
-            case "PLAYER_INVENTORY" -> "inventar " + resolvePlayerAlias(loc.playerUuid()) + slot;
-            case "ENDER_CHEST" -> "ender chest " + resolvePlayerAlias(loc.playerUuid()) + slot;
-            case "BLOCK_CONTAINER" -> (loc.containerType() != null ? loc.containerType() : "kontejner") + " " + coords + slot;
-            case "GROUND" -> "na zemi " + coords;
-            case "PLACED_BLOCK" -> "polozeny blok " + coords;
-            case "PLACED_INTO_MENU" -> "menu " + loc.menuName() + slot;
+            case "PLAYER_INVENTORY" -> Lang.t("gui.location.inventory", resolvePlayerAlias(loc.playerUuid())) + slot;
+            case "ENDER_CHEST" -> Lang.t("gui.location.ender-chest", resolvePlayerAlias(loc.playerUuid())) + slot;
+            case "BLOCK_CONTAINER" -> (loc.containerType() != null ? loc.containerType() : Lang.t("gui.location.container")) + " " + coords + slot;
+            case "GROUND" -> Lang.t("gui.location.ground", coords);
+            case "PLACED_BLOCK" -> Lang.t("gui.location.placed-block", coords);
+            case "PLACED_INTO_MENU" -> Lang.t("gui.location.menu", loc.menuName()) + slot;
             default -> loc.locationType() + (coords.isEmpty() ? "" : " " + coords) + slot;
         };
     }
@@ -2178,7 +2159,7 @@ public final class AdminGuiService implements Listener {
             return;
         }
         if (state.unitUuid == null) {
-            player.sendMessage("Tento event neobsahuje zadny item.");
+            player.sendMessage(Lang.t("chat.event-no-item"));
             return;
         }
         resetEventPreview(player);
@@ -2193,13 +2174,13 @@ public final class AdminGuiService implements Listener {
             try {
                 Optional<EventRecord> found = eventDao.findById(eventId);
                 if (found.isEmpty()) {
-                    Bukkit.getScheduler().runTask(plugin, () -> player.sendMessage("Udalost #" + eventId + " nenalezena."));
+                    Bukkit.getScheduler().runTask(plugin, () -> player.sendMessage(Lang.t("chat.event-not-found", eventId)));
                     return;
                 }
                 Bukkit.getScheduler().runTask(plugin, () -> openEventDetailPage(player, found.get()));
             } catch (SQLException e) {
                 logger.severe("Admin GUI detail udalosti selhal: " + e);
-                Bukkit.getScheduler().runTask(plugin, () -> player.sendMessage("Lookup selhal, viz konzole."));
+                Bukkit.getScheduler().runTask(plugin, () -> player.sendMessage(Lang.t("common.lookup-failed")));
             }
         });
     }
@@ -2217,18 +2198,18 @@ public final class AdminGuiService implements Listener {
                 : List.of();
 
         List<String> infoLines = new ArrayList<>();
-        infoLines.add(actionColour(event.eventType()) + CATEGORY_LABELS.getOrDefault(event.eventType(), event.eventType())
+        infoLines.add(actionColour(event.eventType()) + categoryLabel(event.eventType())
                 + MUTED + "  #" + event.id());
-        infoLines.add(LABEL + "Cas: " + VALUE + formatTime(event.timestamp()));
-        infoLines.add(LABEL + "Hrac: " + VALUE + (event.playerUuid() != null ? resolvePlayerAlias(event.playerUuid()) : "neznamy")
+        infoLines.add(LABEL + Lang.t("gui.event.time") + VALUE + formatTime(event.timestamp()));
+        infoLines.add(LABEL + Lang.t("gui.event.player") + VALUE + (event.playerUuid() != null ? resolvePlayerAlias(event.playerUuid()) : Lang.t("gui.unknown"))
                 + (event.gamemode() != null ? MUTED + " (" + event.gamemode() + ")" : ""));
-        infoLines.add(LABEL + "Misto: " + VALUE + (event.world() != null
-                ? event.world() + " " + event.x() + " " + event.y() + " " + event.z() : "nezname"));
+        infoLines.add(LABEL + Lang.t("gui.event.place") + VALUE + (event.world() != null
+                ? event.world() + " " + event.x() + " " + event.y() + " " + event.z() : Lang.t("gui.unknown")));
         String detail = EventLineFormatter.formatDetail(event.detail());
         if (!detail.isEmpty()) {
-            infoLines.add(LABEL + "Detail: " + VALUE + detail);
+            infoLines.add(LABEL + Lang.t("gui.event.detail") + VALUE + detail);
         }
-        infoLines.add(LABEL + "V okoli: " + VALUE + nearbyLines.size() + LABEL + " hracu (seznam nize)");
+        infoLines.add(LABEL + Lang.t("gui.event.nearby") + VALUE + nearbyLines.size() + LABEL + " " + Lang.t("gui.event.nearby-suffix"));
 
         boolean hasLocation = event.world() != null && event.x() != null && event.y() != null && event.z() != null;
 
@@ -2240,22 +2221,22 @@ public final class AdminGuiService implements Listener {
         double infoX = 0;
         if (shulker != null) {
             infoX = -2.4;
-            infoLines.add(1, LABEL + "Shulker: " + VALUE + shulker.shulkerMaterial() + MUTED + " ("
-                    + (ShulkerSessionLog.MODE_HELD.equals(shulker.mode()) ? "otevren v ruce" : "polozeny") + ")");
+            infoLines.add(1, LABEL + Lang.t("gui.shulker.label") + VALUE + shulker.shulkerMaterial() + MUTED + " ("
+                    + (ShulkerSessionLog.MODE_HELD.equals(shulker.mode()) ? Lang.t("gui.shulker.held") : Lang.t("gui.shulker.placed-short")) + ")");
             addShulkerGridButtons(buttons, shulker);
         }
         // info bottom / list bottom: the list is only TEXT_LIST_ROWS lines now, so both moved down
         buttons.add(infoCard("info", cx(infoX), cy(-0.8), 0.05, infoLines));
         buttons.add(scrollListButton("event-nearby", cx(infoX), cy(0.6), 0.05, nearbyLines,
-                "(nikdo v okoli " + (int) NearbyPlayers.DEFAULT_RADIUS_BLOCKS + " bloku)"));
+                Lang.t("gui.event.nobody-nearby", (int) NearbyPlayers.DEFAULT_RADIUS_BLOCKS)));
         // Back + teleport in one row under the info column, well apart and in the same plane as the
         // rest: at x +1.0 the back button sat right next to a shulker event's change list, whose
         // (much deeper) hitbox took its clicks - there was no way out of the page ("nejde jít pryč").
         double navY = 1.4;
         buttons.add(navButton("back", cx(infoX - (hasLocation ? EVENT_NAV_SPREAD : 0)), cy(navY), 0.05,
-                "< Zpet na udalosti", e -> openEventsPage(player)));
+                Lang.t("gui.event.back"), e -> openEventsPage(player)));
         if (hasLocation) {
-            buttons.add(navButton("teleport", cx(infoX + EVENT_NAV_SPREAD), cy(navY), 0.05, "Teleportovat", e -> teleportToEvent(player, event)));
+            buttons.add(navButton("teleport", cx(infoX + EVENT_NAV_SPREAD), cy(navY), 0.05, Lang.t("gui.teleport"), e -> teleportToEvent(player, event)));
         }
 
         openScreen(player, buttons, "purrtechlog:event:" + event.id());
@@ -2295,10 +2276,10 @@ public final class AdminGuiService implements Listener {
             buttons.add(shulkerSlotButton("shulker-slot-" + d.slot(), cx(x), cy(y), 0.05, d));
 
             String line = switch (d.change()) {
-                case ADDED -> "Slot " + d.slot() + ": pridal +" + d.delta() + " " + itemLabel(d.after());
-                case REMOVED -> "Slot " + d.slot() + ": vzal " + (-d.delta()) + " " + itemLabel(d.before());
-                case REPLACED -> "Slot " + d.slot() + ": " + d.before().getAmount() + " " + itemLabel(d.before())
-                        + " -> " + d.after().getAmount() + " " + itemLabel(d.after());
+                case ADDED -> Lang.t("gui.shulker.line-added", d.slot(), d.delta(), itemLabel(d.after()));
+                case REMOVED -> Lang.t("gui.shulker.line-removed", d.slot(), -d.delta(), itemLabel(d.before()));
+                case REPLACED -> Lang.t("gui.shulker.line-replaced", d.slot(), d.before().getAmount(), itemLabel(d.before()),
+                        d.after().getAmount(), itemLabel(d.after()));
                 case SAME -> null;
             };
             if (line != null) {
@@ -2310,10 +2291,10 @@ public final class AdminGuiService implements Listener {
         int removed = ShulkerSessionLog.totalRemoved(diffs);
         double belowGrid = SHULKER_GRID_TOP_Y + 3 * SHULKER_SLOT_STEP + 0.3;
         buttons.add(buildStaticText("shulker-legend", cx(SHULKER_GRID_CENTER_X), cy(belowGrid), 0.05, List.of(
-                "Pridal: " + added + " ks  |  Vzal: " + removed + " ks",
-                "zelena = pridal, cervena = vzal, zluta = vymenil")));
+                Lang.t("gui.shulker.summary", added, removed),
+                Lang.t("gui.shulker.legend"))));
         buttons.add(scrollListButton("shulker-changes", cx(SHULKER_GRID_CENTER_X), cy(belowGrid + 1.1), 0.05,
-                changeLines, "(obsah se nezmenil)"));
+                changeLines, Lang.t("gui.shulker.unchanged")));
     }
 
     /**
@@ -2344,7 +2325,7 @@ public final class AdminGuiService implements Listener {
 
         List<DisplayLayerData> layers = new ArrayList<>();
         layers.add(square);
-        String hoverText = "Prazdny slot";
+        String hoverText = Lang.t("gui.shulker.empty-slot");
         if (shown != null) {
             ItemDisplayLayerData item = new ItemDisplayLayerData(0, -SHULKER_SLOT_BLOCKS / 2.0, 0.02, GUI_PATH, id + "-item", 2)
                     .setItemStack(shown);
@@ -2367,9 +2348,9 @@ public final class AdminGuiService implements Listener {
                 layers.add(countText);
             }
             hoverText = itemLabel(shown) + " x" + shown.getAmount() + switch (d.change()) {
-                case ADDED -> " (pridal " + d.delta() + ")";
-                case REMOVED -> " (vzal " + (-d.delta()) + ")";
-                case REPLACED -> " (driv " + d.before().getAmount() + " " + itemLabel(d.before()) + ")";
+                case ADDED -> " " + Lang.t("gui.shulker.hover-added", d.delta());
+                case REMOVED -> " " + Lang.t("gui.shulker.hover-removed", -d.delta());
+                case REPLACED -> " " + Lang.t("gui.shulker.hover-replaced", d.before().getAmount(), itemLabel(d.before()));
                 case SAME -> "";
             };
         }
@@ -2413,12 +2394,12 @@ public final class AdminGuiService implements Listener {
      * its world isn't currently loaded. */
     private void teleportToEvent(Player player, EventRecord event) {
         if (event.world() == null || event.x() == null || event.y() == null || event.z() == null) {
-            player.sendMessage("Tato udalost nema ulozenou polohu.");
+            player.sendMessage(Lang.t("chat.event-no-location"));
             return;
         }
         World world = Bukkit.getWorld(event.world());
         if (world == null) {
-            player.sendMessage("Svet '" + event.world() + "' neni nacteny.");
+            player.sendMessage(Lang.t("chat.world-not-loaded", event.world()));
             return;
         }
         DisplayGuiAPI.closeMenu(player);
@@ -2496,9 +2477,9 @@ public final class AdminGuiService implements Listener {
 
     private static String invalidEventsDateReason(LocalDate date, Long otherBoundMillis) {
         if (date.isAfter(LocalDate.now())) {
-            return "Tento den jeste neprobehl.";
+            return Lang.t("chat.date-future");
         }
-        return "Datum by bylo mimo platny rozsah (Od musi byt <= Do).";
+        return Lang.t("chat.date-range");
     }
 
     /** Manual chat-entry fallback for a date the calendar can't easily reach (far past months) -
@@ -2506,15 +2487,13 @@ public final class AdminGuiService implements Listener {
      * from/to session alive so {@link #applyManualDateInput} knows which bound to set. */
     private void beginManualDateInput(Player player) {
         awaitingSearchInput.put(player.getUniqueId(), SearchMode.EVENTS_DATE);
-        player.sendMessage("Napis do chatu datum (napr. 2026-09-19 nebo 2026-09-19 14:30:00) - "
-                + "nesmi byt v budoucnu a musi sedet s druhym ohranicenim (Od <= Do), "
-                + "nebo 'zrusit' pro zruseni.");
+        player.sendMessage(Lang.t("chat.prompt-date", Lang.t("chat.cancel-word")));
     }
 
     private void applyManualDateInput(Player player, String raw) {
         CalendarState state = calendarSessions.get(player.getUniqueId());
         if (state == null) {
-            player.sendMessage("Zadavani vyprselo, otevri kalendar znovu z menu udalosti.");
+            player.sendMessage(Lang.t("chat.date-expired"));
             return;
         }
         String trimmed = raw.trim();
@@ -2530,7 +2509,7 @@ public final class AdminGuiService implements Listener {
                 date = LocalDate.parse(trimmed, DATE_ONLY);
                 dateTime = state.from ? date.atStartOfDay() : date.atTime(23, 59, 59);
             } catch (DateTimeParseException ignored) {
-                player.sendMessage("Neplatny format data: '" + raw + "' (pouzij napr. 2026-09-19 nebo 2026-09-19 14:30:00).");
+                player.sendMessage(Lang.t("chat.date-invalid", raw));
                 return;
             }
         }
@@ -2583,13 +2562,14 @@ public final class AdminGuiService implements Listener {
         // has a large fixed 30x10px (1.875 blocks wide) footprint meant for standalone info panels,
         // which would badly overlap its neighbors at this grid's 0.85-block column step.
         buttons.add(navButton("cal-title", cx(centerX), cy(-1.3), 0.05,
-                MONTH_NAMES.get(state.month.getMonthValue() - 1) + " " + state.month.getYear(), e -> {}));
+                Lang.list("calendar.months").get(state.month.getMonthValue() - 1) + " " + state.month.getYear(), e -> {}));
         buttons.add(navButton("cal-next", cx(startX + 6 * colStep), cy(-1.3), 0.05, ">", e -> shiftCalendarMonth(player, 1)));
 
         double headerY = -0.95;
-        for (int i = 0; i < WEEKDAY_HEADERS.size(); i++) {
+        List<String> weekdays = Lang.list("calendar.weekdays");
+        for (int i = 0; i < weekdays.size(); i++) {
             buttons.add(navButton("cal-hdr-" + i, cx(startX + i * colStep), cy(headerY), 0.05,
-                    WEEKDAY_HEADERS.get(i), e -> {}));
+                    weekdays.get(i), e -> {}));
         }
 
         // Days that can't actually be picked (future, or would cross the other already-set Od/Do
@@ -2619,8 +2599,8 @@ public final class AdminGuiService implements Listener {
 
         int lastRow = (firstDayColumn + daysInMonth - 1) / 7;
         double afterGridY = gridStartY + lastRow * rowStep + 0.3;
-        buttons.add(navButton("cal-cancel", cx(centerX - 0.9), cy(afterGridY), 0.05, "Zrusit", e -> cancelCalendar(player)));
-        buttons.add(navButton("cal-manual", cx(centerX + 0.9), cy(afterGridY), 0.05, "Napsat rucne", e -> beginManualDateInput(player)));
+        buttons.add(navButton("cal-cancel", cx(centerX - 0.9), cy(afterGridY), 0.05, Lang.t("gui.cancel"), e -> cancelCalendar(player)));
+        buttons.add(navButton("cal-manual", cx(centerX + 0.9), cy(afterGridY), 0.05, Lang.t("gui.calendar.manual"), e -> beginManualDateInput(player)));
 
         String pageKey = "purrtechlog:calendar:" + (state.from ? "from" : "to") + ":" + state.month;
         openScreen(player, buttons, pageKey);
@@ -2632,7 +2612,7 @@ public final class AdminGuiService implements Listener {
 
     private void openUuidSearchKeyboard(Player player) {
         keyboardSessions.put(player.getUniqueId(), new KeyboardSession(
-                "Hledat podle UUID", HEX_KEYS, 8, 32, true,
+                Lang.t("gui.main.search-uuid"), HEX_KEYS, 8, 32, true,
                 raw -> openDetail(player, insertUuidDashes(raw)),
                 () -> openMainMenu(player)));
         openKeyboardPage(player);
@@ -2651,7 +2631,7 @@ public final class AdminGuiService implements Listener {
         List<String> infoLines = new ArrayList<>();
         infoLines.add(session.title);
         infoLines.add(preview.isEmpty() ? "-" : preview);
-        infoLines.add(typed.length() + "/" + session.maxLength + " znaku");
+        infoLines.add(Lang.t("gui.keyboard.count", typed.length(), session.maxLength));
         buttons.add(infoTextButton(cx(0), cy(-2.0), 0.04, infoLines));
 
         // Key grid: step 0.75x0.5 blocks, hitbox 11x7px = 0.6875x0.4375 blocks - comfortably under
@@ -2674,15 +2654,15 @@ public final class AdminGuiService implements Listener {
         // Control row: 2x2 grid, step 1.6x0.5 blocks, hitbox 24x7px = 1.5x0.4375 blocks - again
         // comfortably under the step (see [[reference-purrtechdisplaygui-coordinate-rules]]).
         boolean canConfirm = typed.length() == session.maxLength;
-        buttons.add(navButton("kb-backspace", cx(-0.8), cy(controlY), 0.05, 24, 7, "Smazat", e -> backspaceKeyboard(player)));
-        buttons.add(navButton("kb-clear", cx(0.8), cy(controlY), 0.05, 24, 7, "Vymazat", e -> clearKeyboard(player)));
-        buttons.add(navButton("kb-cancel", cx(-0.8), cy(controlY + 0.5), 0.05, 24, 7, "Zrusit", e -> cancelKeyboard(player)));
-        buttons.add(navButton("kb-confirm", cx(0.8), cy(controlY + 0.5), 0.05, 24, 7, "Potvrdit",
+        buttons.add(navButton("kb-backspace", cx(-0.8), cy(controlY), 0.05, 24, 7, Lang.t("gui.keyboard.backspace"), e -> backspaceKeyboard(player)));
+        buttons.add(navButton("kb-clear", cx(0.8), cy(controlY), 0.05, 24, 7, Lang.t("gui.keyboard.clear"), e -> clearKeyboard(player)));
+        buttons.add(navButton("kb-cancel", cx(-0.8), cy(controlY + 0.5), 0.05, 24, 7, Lang.t("gui.cancel"), e -> cancelKeyboard(player)));
+        buttons.add(navButton("kb-confirm", cx(0.8), cy(controlY + 0.5), 0.05, 24, 7, Lang.t("gui.keyboard.confirm"),
                 e -> confirmKeyboard(player), canConfirm));
         // Manual chat-entry fallback, per "u zadávání UUID dej taky klidně tlačítko na zadání do
         // chatu" - same idea as the calendar's "Napsat rucne" button, so a full UUID doesn't need
         // 32 individual hex-key clicks.
-        buttons.add(navButton("kb-manual", cx(0), cy(controlY + 1.0), 0.05, 60, 7, "Napsat do chatu",
+        buttons.add(navButton("kb-manual", cx(0), cy(controlY + 1.0), 0.05, 60, 7, Lang.t("gui.keyboard.manual"),
                 e -> beginManualKeyboardInput(player)));
 
         openScreen(player, buttons, "purrtechlog:keyboard:" + typed.length());
@@ -2730,7 +2710,7 @@ public final class AdminGuiService implements Listener {
             return;
         }
         if (session.buffer.length() != session.maxLength) {
-            player.sendMessage("Nejdriv zadej vsech " + session.maxLength + " znaku.");
+            player.sendMessage(Lang.t("chat.keyboard-incomplete", session.maxLength));
             return;
         }
         keyboardSessions.remove(player.getUniqueId());
@@ -2749,21 +2729,20 @@ public final class AdminGuiService implements Listener {
             return;
         }
         awaitingSearchInput.put(player.getUniqueId(), SearchMode.KEYBOARD_MANUAL);
-        String what = session.uuidFormat ? "UUID (32 hex znaku, pomlcky nevadi)"
-                : "hodnotu (" + session.maxLength + " znaku, povolene: " + String.join("", session.keys) + ")";
-        player.sendMessage("Napis do chatu " + what + " nebo 'zrusit'.");
+        String what = session.uuidFormat ? Lang.t("chat.keyboard-what-uuid")
+                : Lang.t("chat.keyboard-what-value", session.maxLength, String.join("", session.keys));
+        player.sendMessage(Lang.t("chat.keyboard-prompt", what, Lang.t("chat.cancel-word")));
     }
 
     private void applyManualKeyboardInput(Player player, String raw) {
         KeyboardSession session = keyboardSessions.get(player.getUniqueId());
         if (session == null) {
-            player.sendMessage("Zadavani vyprselo, otevri klavesnici znovu z menu.");
+            player.sendMessage(Lang.t("chat.keyboard-expired"));
             return;
         }
         String normalized = session.uuidFormat ? raw.trim().replace("-", "").toLowerCase(Locale.ROOT) : raw.trim();
         if (normalized.length() != session.maxLength || !isFromAllowedKeys(normalized, session.keys)) {
-            player.sendMessage("Neplatna hodnota: '" + raw + "' - musi mit presne " + session.maxLength
-                    + " znaku z povolene sady (" + String.join("", session.keys) + ").");
+            player.sendMessage(Lang.t("chat.keyboard-invalid", raw, session.maxLength, String.join("", session.keys)));
             return;
         }
         session.buffer.setLength(0);

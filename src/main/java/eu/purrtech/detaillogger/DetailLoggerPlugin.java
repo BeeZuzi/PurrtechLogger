@@ -67,6 +67,7 @@ public final class DetailLoggerPlugin extends JavaPlugin {
         database.open();
 
         saveDefaultConfig();
+        eu.purrtech.detaillogger.lang.Lang.load(this);
         applyWriteQueueConfig();
         saveResource("templates.yml", false);
         File templatesFile = new File(getDataFolder(), "templates.yml");
@@ -185,7 +186,7 @@ public final class DetailLoggerPlugin extends JavaPlugin {
             org.bukkit.event.HandlerList.unregisterAll(tagStripListener);
             trackingListeners.forEach(l -> getServer().getPluginManager().registerEvents(l, this));
             Bukkit.getOnlinePlayers().forEach(ledgerService::initCounts);
-            sender.sendMessage("Sledovani ZAPNUTO. Drive sledovane predmety dostanou nove UUID.");
+            sender.sendMessage(eu.purrtech.detaillogger.lang.Lang.t("tracking.enabled"));
         } else {
             trackingListeners.forEach(org.bukkit.event.HandlerList::unregisterAll);
             getServer().getPluginManager().registerEvents(tagStripListener, this);

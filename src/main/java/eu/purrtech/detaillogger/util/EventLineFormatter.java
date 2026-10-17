@@ -1,6 +1,7 @@
 package eu.purrtech.detaillogger.util;
 
 import eu.purrtech.detaillogger.db.dao.EventRecord;
+import eu.purrtech.detaillogger.lang.Lang;
 
 import java.time.Instant;
 import java.time.ZoneId;
@@ -42,18 +43,18 @@ public final class EventLineFormatter {
         long deltaMillis = Math.max(0, System.currentTimeMillis() - epochMillis);
         long seconds = deltaMillis / 1000;
         if (seconds < 60) {
-            return "pred " + seconds + " s";
+            return Lang.t("time.ago-seconds", seconds);
         }
         long minutes = seconds / 60;
         if (minutes < 60) {
-            return "pred " + minutes + " min";
+            return Lang.t("time.ago-minutes", minutes);
         }
         long hours = minutes / 60;
         if (hours < 24) {
-            return "pred " + hours + " h";
+            return Lang.t("time.ago-hours", hours);
         }
         long days = hours / 24;
-        return "pred " + days + " dny";
+        return Lang.t("time.ago-days", days);
     }
 
     /** {@code "@ world x,y,z"}, or {@code ""} if the event carries no coordinates. */

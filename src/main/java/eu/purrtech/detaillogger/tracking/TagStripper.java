@@ -158,8 +158,7 @@ public final class TagStripper {
         for (World world : Bukkit.getWorlds()) {
             chunks.addAll(List.of(world.getLoadedChunks()));
         }
-        sender.sendMessage("Odebiram znacky: hraci hotovi (" + stripped + " ks), " + chunks.size()
-                + " nactenych chunku se zpracuje po davkach...");
+        sender.sendMessage(eu.purrtech.detaillogger.lang.Lang.t("tracking.stripping", stripped, chunks.size()));
         Iterator<Chunk> remaining = chunks.iterator();
         Bukkit.getScheduler().runTaskTimer(plugin, task -> {
             for (int i = 0; i < CHUNKS_PER_TICK && remaining.hasNext(); i++) {
@@ -172,8 +171,7 @@ public final class TagStripper {
             if (!remaining.hasNext()) {
                 task.cancel();
                 trackedUnitDao.enqueueRetireItemUnits("TRACKING_DISABLED");
-                String done = "Hotovo: odebrano " + stripped + " znacek. Jednotky v DB jsou vyrazene. "
-                        + "Hraci offline a nenactene chunky se vycisti, az se nactou.";
+                String done = eu.purrtech.detaillogger.lang.Lang.t("tracking.stripped", stripped);
                 sender.sendMessage(done);
                 plugin.getLogger().info(done);
             }
