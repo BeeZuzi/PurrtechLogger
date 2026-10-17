@@ -2248,15 +2248,21 @@ public final class AdminGuiService implements Listener {
         buttons.add(infoCard("info", cx(infoX), cy(-0.8), 0.05, infoLines));
         buttons.add(scrollListButton("event-nearby", cx(infoX), cy(0.6), 0.05, nearbyLines,
                 "(nikdo v okoli " + (int) NearbyPlayers.DEFAULT_RADIUS_BLOCKS + " bloku)"));
+        // Back + teleport in one row under the info column, well apart and in the same plane as the
+        // rest: at x +1.0 the back button sat right next to a shulker event's change list, whose
+        // (much deeper) hitbox took its clicks - there was no way out of the page ("nejde jít pryč").
+        double navY = 1.4;
+        buttons.add(navButton("back", cx(infoX - (hasLocation ? EVENT_NAV_SPREAD : 0)), cy(navY), 0.05,
+                "< Zpet na udalosti", e -> openEventsPage(player)));
         if (hasLocation) {
-            buttons.add(navButton("teleport", cx(-1.0), cy(1.4), 0.05, "Teleportovat", e -> teleportToEvent(player, event)));
-            buttons.add(navButton("back", cx(1.0), cy(1.4), -0.05, "Zpet na seznam", e -> openEventsPage(player)));
-        } else {
-            buttons.add(navButton("back", cx(0), cy(1.4), -0.05, "Zpet na seznam", e -> openEventsPage(player)));
+            buttons.add(navButton("teleport", cx(infoX + EVENT_NAV_SPREAD), cy(navY), 0.05, "Teleportovat", e -> teleportToEvent(player, event)));
         }
 
         openScreen(player, buttons, "purrtechlog:event:" + event.id());
     }
+
+    /** Event detail: how far (blocks) the back / teleport buttons sit left / right of the info column. */
+    private static final double EVENT_NAV_SPREAD = 1.4;
 
     // === Shulker session grid - "když to bude shulker tak ti to ukáže... co v něm bylo a co vzal
     // (označíš barvou, co přidal a odebral)... minecraft inventář layout". ===
