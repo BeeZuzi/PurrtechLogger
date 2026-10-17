@@ -45,6 +45,7 @@ import org.bukkit.block.BlockState;
 import org.bukkit.block.Container;
 import org.bukkit.enchantments.Enchantment;
 import org.bukkit.entity.Player;
+import org.bukkit.entity.TextDisplay;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.inventory.Inventory;
@@ -113,6 +114,8 @@ public final class AdminGuiService implements Listener {
     /** The filter column on the LEFT: the same angle as the events list on the right, the opposite way,
      * so the two halves face each other symmetrically ("stejnou velikostí úhlu... opačným směrem"). */
     private static final float EVENTS_FILTER_ROTATION_Y_DEGREES = -EVENTS_LIST_ROTATION_Y_DEGREES;
+    /** Air (blocks, along X) between the filter panel's right edge and the main panel's left edge. */
+    private static final double EVENTS_FILTER_GAP_BLOCKS = 0.05;
     /** Depth of the whole events list (blocks, + = toward the player) - was a hardcoded 0.05. */
     private static final double EVENTS_LIST_Z = 0.75;
 
@@ -194,7 +197,7 @@ public final class AdminGuiService implements Listener {
     private static final double COMPACT_TARGET_WIDTH_BLOCKS = 1.7;
     private static final float COMPACT_MIN_TEXT_SCALE = 0.5f;
 
-    private enum SearchMode { PLAYER, EVENTS_DATE, KEYBOARD_MANUAL }
+    private enum SearchMode { PLAYER, EVENTS_DATE, KEYBOARD_MANUAL, PICKER }
 
     /** Per-player state for the events page - active category (null = all), optional time bounds,
      * and whether timestamps render as absolute dates or "pred X". No more pagination offset - the
@@ -208,6 +211,8 @@ public final class AdminGuiService implements Listener {
         private final java.util.Set<String> activePlayers = new java.util.LinkedHashSet<>();
         /** Scroll position of the player picker, kept across the reloads a click causes. */
         private int pickerOffset;
+        /** Player-picker name search typed in chat ("Hledat hrace"); null = list everyone. */
+        private String pickerQuery;
         private Long from;
         private Long to;
         private boolean relativeTime = false;
@@ -292,7 +297,7 @@ public final class AdminGuiService implements Listener {
         this.playerDirectory = playerDirectory;
         this.eventDao = eventDao;
         this.plugin = plugin;
-        ButtonSkin.init(plugin);
+        Skin.configure(plugin.getConfig(), "gui.textures", true);
         this.logger = logger;
     }
 
@@ -309,9 +314,7 @@ public final class AdminGuiService implements Listener {
         buttons.add(navButton("close", cx(0), cy(0.65), 0.05, "Zavrit", e -> DisplayGuiAPI.closeMenu(player)));
         buttons.add(navButton("events", cx(0), cy(1.00), 0.05, "Vsechny udalosti", e -> openEventsPage(player)));
 
-        ScreenPageData screen = new ScreenPageData(backgroundPage(), buttons, "purrtechlog:main", MENU_DISTANCE_PIXELS);
-//        DisplayGuiAPI.closeMenu(player);
-        DisplayGuiAPI.openMenu(player, screen);
+        openScreen(player, buttons, "purrtechlog:main");
     }
 
     /** Entry point for {@code /purrlog gui}: resumes whatever page the player was last on (e.g. the
@@ -336,6 +339,19 @@ public final class AdminGuiService implements Listener {
         player.sendMessage("Napis do chatu nick nebo UUID hledaneho hrace (nebo 'zrusit').");
     }
 
+    /** Player picker's "Hledat hrace": the next chat line filters its list by name (menu stays open). */
+    private void beginPickerSearch(Player player) {
+        awaitingSearchInput.put(player.getUniqueId(), SearchMode.PICKER);
+        player.sendMessage("Napis do chatu jmeno (nebo jeho cast) hledaneho hrace (nebo 'zrusit').");
+    }
+
+    private void applyPickerSearch(Player player, String raw) {
+        EventsFilter filter = eventsFilters.computeIfAbsent(player.getUniqueId(), id -> new EventsFilter());
+        filter.pickerQuery = raw.isBlank() ? null : raw;
+        filter.pickerOffset = 0;
+        openPlayerPicker(player);
+    }
+
     @EventHandler
     public void onChat(AsyncChatEvent event) {
         Player player = event.getPlayer();
@@ -354,6 +370,7 @@ public final class AdminGuiService implements Listener {
                 case PLAYER -> openPlayerSearch(player, raw);
                 case EVENTS_DATE -> applyManualDateInput(player, raw);
                 case KEYBOARD_MANUAL -> applyManualKeyboardInput(player, raw);
+                case PICKER -> applyPickerSearch(player, raw);
             }
         });
     }
@@ -392,10 +409,81 @@ public final class AdminGuiService implements Listener {
      * informace ohledně daného itemu dej doprava"). Not yet confirmed in-game. */
     // Was -1.3 / bottom row at -1.0+4*0.65: the bottom row sat on the "Zpet" button (cx(0), cy(1.6)).
     // Moved left to -2.1 and the whole list up 0.5 (see ITEM_HISTORY_TOP_Y).
-    private static final double ITEM_HISTORY_COLUMN_X = -2.1;
+    // -2.6: the history panel got wider (sized by its rows now), -2.3 overlapped the item panel by ~0.15
+    private static final double ITEM_HISTORY_COLUMN_X = -2.6;
     private static final double ITEM_HISTORY_TOP_Y = -1.5;
-    private static final float ITEM_HISTORY_ROTATION_Y_DEGREES = 10f;
-    private static final double ITEM_INFO_COLUMN_X = 2.9;
+    /** 0 = the history faces the player flat, like the picker ("dáš 0 stupňů"). */
+    private static final float ITEM_HISTORY_ROTATION_Y_DEGREES = 0f;
+    private static final double ITEM_INFO_COLUMN_X = 2.4;
+    /** Bottom of the item info card (it grows up from here) and of the back button below it. */
+    private static final double ITEM_INFO_BOTTOM_Y = 1.0, ITEM_BACK_Y = 1.45;
+    /** Extra width (blocks) of the history panel on each side ("rozšiř do stran"). */
+    private static final double ITEM_HISTORY_PANEL_PAD_X = 0.25;
+    /** Gap (blocks) between the info card's right edge and its line buttons (copy / teleport). */
+    private static final double ITEM_LINE_BUTTON_GAP = 0.15;
+
+    /**
+     * A compact button right of the info card, on the (first) displayed line starting with
+     * {@code linePrefix} (colour codes ignored). The card is left-aligned text growing up from its
+     * bottom, so line k's center is {@code top + (k + 0.5) * lineHeight}.
+     */
+    private void addInfoLineButton(List<ButtonData> buttons, ButtonData card, List<String> lines, String linePrefix,
+                                   String id, String label, Consumer<MenuButtonClickEvent> onClick) {
+        TextDisplayLayerData text = (TextDisplayLayerData) card.getLayersData().getDisplayLayerData().values().iterator().next();
+        List<String> shown = text.getDisplayTextLines();
+        int index = -1;
+        for (int k = 0; k < shown.size(); k++) {
+            if (shown.get(k).replaceAll("§.", "").startsWith(linePrefix)) {
+                index = k;
+                break;
+            }
+        }
+        if (index < 0) return;
+        double lineHeight = text.estimateContentHeightBlocks() / shown.size();
+        double cardTop = card.getY() - text.estimateContentHeightBlocks();
+        double lineCenter = cardTop + (index + 0.5) * lineHeight;
+        ButtonData button = compactButton(id, 0, 0, 0.05, label, onClick, false);
+        // a button grows up from its anchor too -> anchor half its height below the line center
+        double x = card.getX() + card.getWidth() / 2 + ITEM_LINE_BUTTON_GAP + button.getWidth() / 2;
+        buttons.add(compactButton(id, x, lineCenter + button.getHeight() / 2, 0.05, label, onClick, false));
+    }
+
+    /** Chat line with a click-to-copy value ("pošle se mu to do chatu kde na to klikne a zkopíruje se"). */
+    private static void sendCopyable(Player player, String label, String value) {
+        player.sendMessage(net.kyori.adventure.text.Component.text(label, net.kyori.adventure.text.format.NamedTextColor.GRAY)
+                .append(net.kyori.adventure.text.Component.text(value, net.kyori.adventure.text.format.NamedTextColor.WHITE)
+                        .decorate(net.kyori.adventure.text.format.TextDecoration.UNDERLINED)
+                        .clickEvent(net.kyori.adventure.text.event.ClickEvent.copyToClipboard(value))
+                        .hoverEvent(net.kyori.adventure.text.Component.text("Klikni pro zkopirovani"))));
+    }
+
+    /** A recorded block position, or a holder (inventory / ender chest) who is online. */
+    private static boolean canTeleport(UnitLocationRecord loc) {
+        if (loc == null) return false;
+        if (loc.world() != null && loc.x() != null && loc.y() != null && loc.z() != null) return true;
+        return loc.playerUuid() != null && Bukkit.getPlayer(UUID.fromString(loc.playerUuid())) != null;
+    }
+
+    private void teleportToUnit(Player player, UnitLocationRecord loc) {
+        Location target = null;
+        if (loc.world() != null && loc.x() != null && loc.y() != null && loc.z() != null) {
+            World world = Bukkit.getWorld(loc.world());
+            if (world == null) {
+                player.sendMessage("Svet '" + loc.world() + "' neni nacteny.");
+                return;
+            }
+            target = new Location(world, loc.x() + 0.5, loc.y(), loc.z() + 0.5);
+        } else if (loc.playerUuid() != null) {
+            Player holder = Bukkit.getPlayer(UUID.fromString(loc.playerUuid()));
+            if (holder != null) target = holder.getLocation();
+        }
+        if (target == null) {
+            player.sendMessage("Poloha itemu neni znama (nebo drzitel neni online).");
+            return;
+        }
+        DisplayGuiAPI.closeMenu(player);
+        player.teleport(target);
+    }
     private static final String ITEM_ICON_ID = "item-icon";
     private static final double ITEM_ICON_BLOCKS = 0.8;
 
@@ -423,27 +511,33 @@ public final class AdminGuiService implements Listener {
         ItemStack live = findLiveItem(unit.uuid(), location);
         ItemStack icon = live != null ? live : iconFor(materialName);
 
+        // Sections like the hover preview: title, then item / state / place / lineage, label grey,
+        // value white, state green/red ("k tomu popisu ... design aby to bylo přehlednější").
         List<String> infoLines = new ArrayList<>();
-        infoLines.add(itemTitle(live, materialName));
-        infoLines.add("UUID: " + unit.uuid());
-        infoLines.add("Material: " + (materialName != null ? materialName : "?"));
+        infoLines.add("§6" + itemTitle(live, materialName));
+        infoLines.add(MUTED + unit.uuid());
+        infoLines.add("");
+        infoLines.add(LABEL + "Material: " + VALUE + (materialName != null ? materialName : "?"));
         if (live != null) {
-            infoLines.add("Mnozstvi: " + live.getAmount() + " ks ve stacku");
-            infoLines.add("Enchanty: " + formatEnchants(live));
+            infoLines.add(LABEL + "Mnozstvi: " + VALUE + live.getAmount() + " ks");
+            infoLines.add(LABEL + "Enchanty: " + VALUE + formatEnchants(live));
         } else {
-            infoLines.add("Mnozstvi/enchanty: ? (item neni nacteny)");
+            infoLines.add(MUTED + "Mnozstvi/enchanty: item neni nacteny");
         }
-        infoLines.add("Kind: " + unit.kind() + "  Origin: " + unit.origin());
-        infoLines.add("Vznik: " + formatTime(unit.genesisAt()));
-        infoLines.add("Stav: " + (unit.alive() ? "existuje"
-                : "znicen (" + unit.destroyedCause() + ") " + formatTime(unit.destroyedAt())));
+        infoLines.add(LABEL + "Druh: " + VALUE + unit.kind() + LABEL + "  Puvod: " + VALUE + unit.origin());
+        infoLines.add("");
+        infoLines.add(LABEL + "Stav: " + (unit.alive() ? GOOD + "existuje"
+                : BAD + "znicen " + MUTED + "(" + unit.destroyedCause() + ", " + formatTime(unit.destroyedAt()) + ")"));
+        infoLines.add(LABEL + "Vznik: " + VALUE + formatTime(unit.genesisAt()));
         if (unit.duplicatedFromUuid() != null) {
-            infoLines.add("Duplikat z: " + unit.duplicatedFromUuid());
+            infoLines.add(BAD + "Duplikat z: " + VALUE + shortUuid(unit.duplicatedFromUuid()));
         }
-        infoLines.add("Poloha: " + formatUnitLocation(location));
-        addLineageLines(infoLines, "Vznikl z", parents);
-        addLineageLines(infoLines, "Promenen na", children);
-        infoLines.add("Udalosti: " + history.events().size());
+        infoLines.add(LABEL + "Poloha: " + VALUE + formatUnitLocation(location));
+        if (!parents.isEmpty() || !children.isEmpty()) {
+            infoLines.add("");
+            addLineageLines(infoLines, LABEL + "Vznikl z" + VALUE, parents);
+            addLineageLines(infoLines, LABEL + "Promenen na" + VALUE, children);
+        }
 
         // History as the same clickable scroll list as the events menu, newest first like there.
         List<EventRecord> events = new ArrayList<>(history.events());
@@ -455,22 +549,42 @@ public final class AdminGuiService implements Listener {
         Map<String, String> materials = materialName != null ? Map.of(unit.uuid(), materialName) : Map.of();
 
         List<ButtonData> buttons = new ArrayList<>();
-        buttons.add(eventsListButton(player, "item-history", cx(ITEM_HISTORY_COLUMN_X), cy(bottomRowY), EVENTS_LIST_Z,
+        buttons.add(eventsListButton(player, "item-history", cx(ITEM_HISTORY_COLUMN_X), cy(bottomRowY), FLAT_LIST_Z,
                 events, materials, relativeTime, rowStepY, ITEM_HISTORY_ROTATION_Y_DEGREES, false));
-        buttons.add(itemIconButton(player, cx(ITEM_INFO_COLUMN_X), cy(-1.9), 0.05, icon, live, materialName));
-        buttons.add(infoTextButton(cx(ITEM_INFO_COLUMN_X), cy(1.0), 0.05, infoLines));
-        buttons.add(navButton("back", cx(0), cy(1.6), -0.05, "Zpet", e -> openMainMenu(player)));
+        ButtonData info = infoCard("item-info", cx(ITEM_INFO_COLUMN_X), cy(ITEM_INFO_BOTTOM_Y), 0.05, infoLines);
+        // the icon sits just above the card, however tall the card turned out
+        double infoTop = ITEM_INFO_BOTTOM_Y - info.getHeight(); // getHeight() is already in blocks
+        buttons.add(itemIconButton(player, cx(ITEM_INFO_COLUMN_X), cy(infoTop - 0.15), 0.05, icon, live, materialName));
+        buttons.add(info);
+        buttons.add(navButton("back", cx(ITEM_INFO_COLUMN_X), cy(ITEM_BACK_Y), -0.05, "Zpet", e -> openMainMenu(player)));
 
-        ScreenPageData screen = new ScreenPageData(backgroundPage(), buttons, "purrtechlog:detail:" + unit.uuid(), MENU_DISTANCE_PIXELS);
-//        DisplayGuiAPI.closeMenu(player);
-        DisplayGuiAPI.openMenu(player, screen);
+        // Small action buttons right of the card, on the line they act on: copy the source UUID
+        // (sent to chat as a click-to-copy text) and teleport to the item's last known place.
+        if (unit.duplicatedFromUuid() != null) {
+            String source = unit.duplicatedFromUuid();
+            addInfoLineButton(buttons, info, infoLines, "Duplikat z: ", "item-copy-dup", "Kopirovat UUID",
+                    e -> sendCopyable(player, "Duplikat z: ", source));
+        }
+        if (canTeleport(location)) {
+            addInfoLineButton(buttons, info, infoLines, "Poloha: ", "item-teleport", "Teleportovat",
+                    e -> teleportToUnit(player, location));
+        }
+
+        // Own panel for the history (titled with its count) and one for the item, so the background
+        // reaches around the whole list instead of being cut by a shared box ("rozšíříš to pozadí").
+        java.util.function.Predicate<ButtonData> isHistory = b -> b.getId().equals("item-history");
+        openScreen(player, buttons, "purrtechlog:detail:" + unit.uuid(),
+                new Region("Historie §7(" + history.events().size() + ")", isHistory, 0f, ITEM_HISTORY_PANEL_PAD_X),
+                new Region(MAIN_TITLE, isHistory.negate()));
     }
 
     public void openAlerts(Player player) {
         Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
             try {
                 List<DupeAlertRecord> alerts = dupeAlertDao.findUnresolved(50);
-                Bukkit.getScheduler().runTask(plugin, () -> openAlertsPage(player, alerts));
+                Map<String, String> materials = templateDao.findMaterialsByUnits(alerts.stream()
+                        .map(DupeAlertRecord::unitUuid).filter(java.util.Objects::nonNull).distinct().toList());
+                Bukkit.getScheduler().runTask(plugin, () -> openAlertsPage(player, alerts, materials));
             } catch (SQLException e) {
                 logger.severe("Admin GUI alerts lookup selhal: " + e);
                 Bukkit.getScheduler().runTask(plugin, () -> player.sendMessage("Lookup selhal, viz konzole."));
@@ -478,20 +592,42 @@ public final class AdminGuiService implements Listener {
         });
     }
 
-    private void openAlertsPage(Player player, List<DupeAlertRecord> alerts) {
-        List<String> lines = new ArrayList<>();
+    /** Alerts list: same flat card list as the item history, top row y and visible rows. */
+    private static final double ALERTS_TOP_Y = -1.3;
+    private static final int ALERTS_VISIBLE_ROWS = 4;
+
+    /** One card per unresolved alert (same design as the event rows); clicking opens the item's log. */
+    private void openAlertsPage(Player player, List<DupeAlertRecord> alerts, Map<String, String> materials) {
+        lastPage.put(player.getUniqueId(), () -> openAlerts(player));
+        List<ButtonData> rows = new ArrayList<>();
         for (DupeAlertRecord a : alerts) {
-            lines.add("[" + a.severity() + "] " + a.note() + " uuid=" + a.unitUuid()
-                    + " observed=" + a.observedCount() + "/" + a.expectedAliveCount());
+            String where = a.world() != null ? a.world() + " " + a.x() + " " + a.y() + " " + a.z() : "misto nezname";
+            List<String> lines = List.of(
+                    BAD + "[" + a.severity() + "] " + VALUE + (a.note() != null ? a.note() : "dupe")
+                            + MUTED + "  " + (a.unitUuid() != null ? shortUuid(a.unitUuid()) : "?"),
+                    MUTED + formatTime(a.detectedAt()) + "  |  " + LABEL + "nalezeno " + VALUE + a.observedCount()
+                            + LABEL + "/" + a.expectedAliveCount() + MUTED + "  |  " + where);
+            rows.add(eventRowButton("alert-" + a.id(), 0, 0, 0.01, lines, iconFor(materials.get(a.unitUuid())), 0f,
+                    e -> {
+                        if (a.unitUuid() != null) {
+                            openDetail(player, a.unitUuid());
+                        }
+                    }, null, null));
         }
 
         List<ButtonData> buttons = new ArrayList<>();
-        buttons.add(scrollListButton("alerts", cx(0), cy(0.3), 0.05, lines, "(zadne nevyresene alerty)"));
-        buttons.add(navButton("back", cx(0), cy(1.4), 0.05, "Zpet", e -> openMainMenu(player)));
+        double rowStepY = 0.65;
+        double bottomRowY = ALERTS_TOP_Y + (ALERTS_VISIBLE_ROWS - 1) * rowStepY;
+        if (rows.isEmpty()) {
+            buttons.add(buildStaticText("alerts-empty", cx(0), cy(0), 0.05, List.of(GOOD + "Zadne nevyresene alerty")));
+        } else {
+            buttons.add(scrollFrame("alerts", cx(0), cy(bottomRowY), FLAT_LIST_Z, rows,
+                    EVENT_ROW_CARD_WIDTH_BLOCKS * PIXELS_PER_BLOCK + HITBOX_PADDING_PX, rowStepY, ALERTS_VISIBLE_ROWS));
+        }
+        buttons.add(navButton("back", cx(0), cy(bottomRowY + 0.5), 0.05, "Zpet", e -> openMainMenu(player)));
 
-        ScreenPageData screen = new ScreenPageData(backgroundPage(), buttons, "purrtechlog:alerts", MENU_DISTANCE_PIXELS);
-//        DisplayGuiAPI.closeMenu(player);
-        DisplayGuiAPI.openMenu(player, screen);
+        openScreen(player, buttons, "purrtechlog:alerts",
+                new Region("Nevyresene alerty §7(" + alerts.size() + (alerts.size() >= 50 ? "+" : "") + ")", b -> true));
     }
 
     /** State of the players menu: the full directory (loaded once per open) plus the live search text. */
@@ -611,9 +747,7 @@ public final class AdminGuiService implements Listener {
         }));
 
         // Page key carries query + offset so every state is a genuinely new menu, never a reused one.
-        ScreenPageData screen = new ScreenPageData(backgroundPage(), buttons,
-                "purrtechlog:players:" + q + ":" + offset, MENU_DISTANCE_PIXELS);
-        DisplayGuiAPI.openMenu(player, screen);
+        openScreen(player, buttons, "purrtechlog:players:" + q + ":" + offset);
     }
 
     public void openPlayerDetail(Player player, String targetUuid) {
@@ -670,25 +804,150 @@ public final class AdminGuiService implements Listener {
         buttons.add(scrollListButton("activity", cx(0), cy(0.3), 0.05, activityLines, "(zadna aktivita)"));
         buttons.add(navButton("back", cx(0), cy(1.4), -0.05, "Zpet", e -> openMainMenu(player)));
 
-        ScreenPageData screen = new ScreenPageData(backgroundPage(), buttons, "purrtechlog:player:" + unit.uuid(), MENU_DISTANCE_PIXELS);
-        DisplayGuiAPI.openMenu(player, screen);
+        openScreen(player, buttons, "purrtechlog:player:" + unit.uuid());
     }
 
-    private PageData backgroundPage() {
-        TextDisplayLayerData bg = new TextDisplayLayerData(0, 0, 0, GUI_PATH, "bg", 1)
-                .setText(List.of("PurrTechDetailLogger", "", "", ""))
-                .setBackground(Color.fromARGB(100, 15, 15, 15))
-                .setAutoFitText(true);
+    // === Page background: one panel per Region, sized to the buttons it holds (not the whole
+    // SCREEN_WIDTH x SCREEN_HEIGHT box, whose bottom sat ~3 blocks below eye level - "zasahuje do
+    // bloků"), with its title on top. ===
 
-        bg.setScale(bg.getVectorWithPixels(30,30,0));
-        bg.setWidth(SCREEN_WIDTH_BLOCKS);
-        bg.setHeight(SCREEN_HEIGHT_BLOCKS);
-        LayersData design = new LayersData(List.of(bg), GUI_PATH + ":background", GUI_PATH);
-        // Center of the (SCREEN_WIDTH_BLOCKS x SCREEN_HEIGHT_BLOCKS) screen, NOT (0,0) - a PageData
-        // at local (0,0) puts its own center on the top-left corner instead of screen-center, which
-        // is exactly what caused the whole menu to render off to the player's left. See
-        // [[reference-purrtechdisplaygui-coordinate-rules]].
-        return new PageData(CENTER_X, CENTER_Y, 0, design, PageType.NORMAL);
+    private static final String MAIN_TITLE = "PurrTechDetailLogger";
+    /** Air around the buttons, and the extra room above them for the title (blocks). */
+    private static final double PANEL_MARGIN = 0.3, PANEL_TITLE_ROOM = 0.4;
+    private static final float PANEL_TITLE_SCALE = 1.1f;
+    /** Lowest a panel may reach, blocks below eye level - about the player's feet. */
+    private static final double PANEL_MAX_BOTTOM_REL = 1.45;
+    private static final Color PANEL_FALLBACK = Color.fromARGB(100, 15, 15, 15);
+
+    /** A titled background panel around the page buttons {@code members} accepts. */
+    /** {@code padX} = extra panel width on each side (blocks), on top of {@link #PANEL_MARGIN}. */
+    private record Region(String title, java.util.function.Predicate<ButtonData> members, float rotationY, double padX) {
+        Region(String title, java.util.function.Predicate<ButtonData> members) {
+            this(title, members, 0f, 0);
+        }
+
+        Region(String title, java.util.function.Predicate<ButtonData> members, float rotationY) {
+            this(title, members, rotationY, 0);
+        }
+    }
+
+    /** Opens a page with one titled panel around all its buttons (or the given regions). */
+    private void openScreen(Player player, List<ButtonData> buttons, String key, Region... regions) {
+        if (regions.length == 0) {
+            regions = new Region[]{new Region(MAIN_TITLE, b -> true)};
+        }
+        List<DisplayLayerData> layers = new ArrayList<>();
+        // Invisible sizing layer: the biggest layer still decides screenWidth/Height (where zeroLoc
+        // and so every cx()/cy() lands), the panels themselves are sized to their content.
+        TextDisplayLayerData sizer = new TextDisplayLayerData(0, 0, 0, GUI_PATH, "bg", 1)
+                .setText(List.of(" "))
+                .setBackground(TRANSPARENT);
+        sizer.setWidth(SCREEN_WIDTH_BLOCKS);
+        sizer.setHeight(SCREEN_HEIGHT_BLOCKS);
+        layers.add(sizer);
+        for (Region region : regions) {
+            addPanel(layers, buttons, region);
+        }
+        // Center of the screen, NOT (0,0) - see [[reference-purrtechdisplaygui-coordinate-rules]].
+        PageData page = new PageData(CENTER_X, CENTER_Y, 0, new LayersData(layers, GUI_PATH + ":background", GUI_PATH), PageType.NORMAL);
+        DisplayGuiAPI.openMenu(player, Skin.apply(new ScreenPageData(page, buttons, key, MENU_DISTANCE_PIXELS), null));
+    }
+
+    /** Where a region's panel lands: center (page offsets from screen center), size, depth, the
+     * title's y, and the turn. {@code null} when the region holds no button. */
+    private record PanelBox(double centerX, double centerY, double deep, double width, double height,
+                            double titleY, float rotationY) {
+        /** World-ish x/z (page offsets) of the panel's left (-1) or right (+1) edge along its face. */
+        double edgeX(int side) {
+            return centerX + side * width / 2 * Math.cos(Math.toRadians(rotationY));
+        }
+
+        double edgeZ(int side) {
+            return deep - side * width / 2 * Math.sin(Math.toRadians(rotationY));
+        }
+    }
+
+    private static PanelBox panelBox(List<ButtonData> buttons, Region region) {
+        double minX = Double.MAX_VALUE, maxX = -Double.MAX_VALUE, minY = Double.MAX_VALUE, maxY = -Double.MAX_VALUE;
+        double backZ = 0;
+        // A turned region's buttons lie on one plane through the first member (z = z0 - along*sin):
+        // x below is measured along that plane, and the panel is turned the same way.
+        double turn = Math.toRadians(region.rotationY());
+        double pivotX = Double.NaN, planeZ = Double.MAX_VALUE;
+        for (ButtonData b : buttons) {
+            // the hover preview floats far in front of the menu and draws its own panel
+            if (EVENT_PREVIEW_ID.equals(b.getId()) || !region.members().test(b)) continue;
+            if (Double.isNaN(pivotX)) pivotX = b.getX();
+            // a button's visual grows up from its x,y (+y = down) and is centered horizontally
+            double w = b.getWidth(), h = b.getHeight();
+            if (b instanceof ButtonListScrollButtonData) {
+                // a list's hitbox is kept narrower than its rows (scrollFrame) - size by its frame layer
+                for (DisplayLayerData l : b.getLayersData().getDisplayLayerData().values()) w = Math.max(w, l.getWidth());
+            }
+            double along = (b.getX() - pivotX) / Math.cos(turn);
+            minX = Math.min(minX, along - w / 2);
+            maxX = Math.max(maxX, along + w / 2);
+            minY = Math.min(minY, b.getY() - h);
+            maxY = Math.max(maxY, b.getY());
+            planeZ = Math.min(planeZ, b.getZ() + along * Math.sin(turn));
+            // a button turned toward the player pokes its far edge behind its own plane - keep the
+            // panel behind that edge so the two never cut through each other
+            float rotY = b.getLayersData().getDisplayLayerData().values().stream()
+                    .map(DisplayLayerData::getRotationY).filter(r -> r != 0f).findFirst().orElse(0f);
+            backZ = Math.min(backZ, b.getZ() - w / 2 * Math.abs(Math.sin(Math.toRadians(rotY))));
+        }
+        if (minX > maxX) return null;
+
+        double titleWidth = panelTitle(0, 0, 0, 0, region.title()).estimateContentWidthBlocks();
+
+        double top = minY - PANEL_MARGIN - PANEL_TITLE_ROOM;
+        double bottom = Math.min(maxY + PANEL_MARGIN, CENTER_Y + PANEL_MAX_BOTTOM_REL);
+        double width = Math.max(maxX - minX + 2 * (PANEL_MARGIN + region.padX()), titleWidth + 2 * PANEL_MARGIN);
+        // page layers are offsets from the page anchor (= screen center)
+        double centerAlong = (minX + maxX) / 2;
+        double centerX = pivotX + centerAlong * Math.cos(turn) - CENTER_X;
+        double deep = turn == 0 ? backZ - 0.05 : planeZ - centerAlong * Math.sin(turn) - 0.05;
+        return new PanelBox(centerX, (top + bottom) / 2 - CENTER_Y, deep, width, bottom - top,
+                minY - PANEL_MARGIN + 0.05 - CENTER_Y, region.rotationY());
+    }
+
+    /** Panel (ItemsAdder texture, or a dim rectangle without it) + title behind the region's buttons. */
+    private static void addPanel(List<DisplayLayerData> layers, List<ButtonData> buttons, Region region) {
+        PanelBox box = panelBox(buttons, region);
+        if (box == null) return;
+        double centerX = box.centerX(), centerY = box.centerY(), deep = box.deep();
+        double width = box.width(), height = box.height();
+
+        int position = layers.size() + 1;
+        DisplayLayerData panel = Skin.enabled
+                ? Skin.texture("display_entity_configuration", centerX, centerY, deep, width, height, position, GUI_PATH, "panel-skin")
+                : null;
+        if (panel == null) {
+            // text grows up from its anchor, so the anchor is the rectangle's bottom edge
+            TextDisplayLayerData rect = new TextDisplayLayerData(centerX, centerY + height / 2, deep, GUI_PATH, "panel", position)
+                    .setText(List.of(" "))
+                    .setBackground(PANEL_FALLBACK);
+            rect.setAutoFitText(false);
+            rect.setScale(new Vector3f((float) (width / rect.backgroundWidthBlocksAtUnitScale()),
+                    (float) (height / rect.backgroundHeightBlocksAtUnitScale()), 1f));
+            panel = rect;
+        }
+        panel.setRotationY(region.rotationY());
+        layers.add(panel);
+        // title bottom just above the buttons, horizontally on the panel's center
+        TextDisplayLayerData title = panelTitle(centerX, box.titleY(), deep + 0.02, position + 1, region.title());
+        title.setRotationY(region.rotationY());
+        layers.add(title);
+    }
+
+    private static TextDisplayLayerData panelTitle(double x, double y, double deep, int position, String title) {
+        TextDisplayLayerData text = new TextDisplayLayerData(x, y, deep, GUI_PATH, "panel-title", position,
+                TRANSPARENT, TextDisplay.TextAlignment.CENTER)
+                .setText(List.of("§6" + title));
+        text.setAutoFitText(false);
+        text.setTextShadow(true);
+        text.setScale(new Vector3f(PANEL_TITLE_SCALE, PANEL_TITLE_SCALE, 1f));
+        return text;
     }
 
     /** Local x for a button placed {@code relX} blocks right (positive) or left (negative) of the
@@ -703,13 +962,10 @@ public final class AdminGuiService implements Listener {
         return CENTER_Y + relY;
     }
 
-    /** Button design: the optional ItemsAdder frame behind the text (see {@link ButtonSkin}); the text
-     * background is then transparent unless the button carries a state colour (active / disabled). */
+    /** Button design: just the text - the optional ItemsAdder frame (config {@code gui.textures}) is
+     * added for every button at once by {@link Skin#apply} when the screen opens. */
     private LayersData buttonDesign(String id, TextDisplayLayerData text, double widthPixels, float rotationY, boolean stateColour) {
-        var frame = ButtonSkin.frame(GUI_PATH, id, widthPixels, rotationY);
-        if (frame == null) return new LayersData(List.of(text), GUI_PATH + ":" + id, GUI_PATH);
-        if (!stateColour) text.setBackground(TRANSPARENT);
-        return new LayersData(List.of(frame, text), GUI_PATH + ":" + id, GUI_PATH);
+        return new LayersData(List.of(text), GUI_PATH + ":" + id, GUI_PATH);
     }
 
     private ButtonData navButton(String id, double x, double y, double z, String label,
@@ -843,13 +1099,37 @@ public final class AdminGuiService implements Listener {
         if (rotationY != 0f) {
             text.setRotationY(rotationY);
         }
-        LayersData design = new LayersData(List.of(text), GUI_PATH + ":info", GUI_PATH);
+        return textBlock("info", x, y, z, text);
+    }
+
+    /** Wrap width (characters) and scale of a designed info card - see {@link #infoCard}. */
+    private static final int INFO_CARD_WRAP_CHARS = 44;
+    private static final float INFO_CARD_SCALE = 0.75f;
+
+    /** A multi-section info text (§-coloured lines, blank lines between sections) drawn as designed:
+     * DisplayGUI's default shrinks anything over 3 lines (to 65 % here) and wraps at 32 chars. */
+    private ButtonData infoCard(String id, double x, double y, double z, List<String> lines) {
+        TextDisplayLayerData text = new TextDisplayLayerData(0, 0, 0, GUI_PATH, id + "-text", 1,
+                PANEL_BACKGROUND, TextDisplay.TextAlignment.LEFT)
+                .setText(lines)
+                .setMaxLines(lines.size() * 2)
+                .setMaxCharactersPerLine(INFO_CARD_WRAP_CHARS);
+        text.setTextShadow(true);
+        text.setScale(new Vector3f(INFO_CARD_SCALE, INFO_CARD_SCALE, 1f));
+        return textBlock(id, x, y, z, text);
+    }
+
+    /** Non-clickable text button sized to the text's own rendered box, so the page panel fits it
+     * (a fixed 30 x 10 px left long texts sticking out of the panel). */
+    private ButtonData textBlock(String id, double x, double y, double z, TextDisplayLayerData text) {
+        double widthPixels = text.estimateContentWidthBlocks() * PIXELS_PER_BLOCK + HITBOX_PADDING_PX;
+        double heightPixels = text.estimateContentHeightBlocks() * PIXELS_PER_BLOCK;
         return ButtonData.builder()
                 .at(x, y, z)
-                .size(30, 10)
-                .layers(design)
-                .id("info")
-                .hitboxOffsetZ(rotationY != 0f ? ROTATED_TILE_HITBOX_RECESS_Z : hitboxRecessZ(30))
+                .size(widthPixels, heightPixels)
+                .layers(new LayersData(List.of(text), GUI_PATH + ":" + id, GUI_PATH))
+                .id(id)
+                .hitboxOffsetZ(text.getRotationY() != 0f ? ROTATED_TILE_HITBOX_RECESS_Z : hitboxRecessZ(widthPixels))
                 .build();
     }
 
@@ -903,14 +1183,30 @@ public final class AdminGuiService implements Listener {
     }
 
 
+    /** Rows a text scroll list shows at once (nearby players, player activity). */
+    private static final int TEXT_LIST_ROWS = 4;
+
     private ButtonData scrollListButton(String id, double x, double y, double z, List<String> items, String emptyLabel) {
-        return scrollListButton(id, x, y, z, 20, 130, 4, items, emptyLabel);
+        // Sized to what is actually drawn (TEXT_LIST_ROWS lines, widest item) - it used to be a fixed
+        // 20 x 130 px, and the page panel sized itself to that 8-block-tall box ("moc vysoké").
+        List<String> shown = items.isEmpty() ? List.of(emptyLabel) : items;
+        TextDisplayLayerData probe = listContent(id).setText(shown);
+        double widthBlocks = probe.estimateContentWidthBlocks();
+        probe.setText(java.util.Collections.nCopies(TEXT_LIST_ROWS, "x"));
+        return scrollListButton(id, x, y, z, widthBlocks * PIXELS_PER_BLOCK + HITBOX_PADDING_PX,
+                probe.estimateContentHeightBlocks() * PIXELS_PER_BLOCK, TEXT_LIST_ROWS, items, emptyLabel);
+    }
+
+    /** A text list's content layer; maxLines = the window, so DisplayGUI doesn't shrink 4 rows to 3/4. */
+    private static TextDisplayLayerData listContent(String id) {
+        return new TextDisplayLayerData(0, 0, 0, GUI_PATH, id + "-content", 1)
+                .setMaxLines(TEXT_LIST_ROWS)
+                .setBackground(PANEL_BACKGROUND);
     }
 
     private ButtonData scrollListButton(String id, double x, double y, double z, double widthPixels,
                                          double heightPixels, int visibleRows, List<String> items, String emptyLabel) {
-        TextDisplayLayerData content = new TextDisplayLayerData(0, 0, 0, GUI_PATH, id + "-content", 1)
-                .setBackground(PANEL_BACKGROUND);
+        TextDisplayLayerData content = listContent(id);
         LayersData design = new LayersData(List.of(content), GUI_PATH + ":" + id, GUI_PATH);
         return ScrollButtonData.scrollButtonBuilder()
                 .at(x, y, z)
@@ -997,34 +1293,8 @@ public final class AdminGuiService implements Listener {
         resetEventPreview(player);
         unitPreviewCache.clear();
 
-        List<String> categoryButtons = new ArrayList<>();
-        categoryButtons.add("ALL");
-        categoryButtons.addAll(EVENT_CATEGORIES);
-
-        // Filter column widened to 2 columns (was 3x4 at a too-tight 1.15 step, which made 6-8
-        // char labels visually stick together at full scale) x 6 rows, freeing the horizontal room
-        // a 3rd column would need. Combined with compactButton's shrink, every label now fits
-        // comfortably under the 2.0-block column step - see
-        // [[reference-purrtechdisplaygui-coordinate-rules]]. Stretched down/left into the space
-        // freed by moving the date range off this row entirely, per the user's own "roztáhnou
-        // dolu... nebo doleva" instruction.
-        int columns = 2;
-        double stepX = 2.0;
-        double filterCenterX = -4.0; // was -2.5: moved 1.5 left to make room for the player filter
-        double startX = filterCenterX - (columns - 1) * stepX / 2.0;
-        double startY = -1.3;
-        double stepY = 0.4;
-        double lastRowY = startY;
-        for (int i = 0; i < categoryButtons.size(); i++) {
-            String type = categoryButtons.get(i);
-            double x = startX + (i % columns) * stepX;
-            double y = startY + (i / columns) * stepY;
-            lastRowY = Math.max(lastRowY, y);
-            boolean active = type.equals("ALL") ? filter.activeCategories.isEmpty() : filter.activeCategories.contains(type);
-            String label = type.equals("ALL") ? "Vse" : CATEGORY_LABELS.getOrDefault(type, type);
-            buttons.add(compactButton("cat-" + type, cx(x), cy(y), 0.05, label, e -> toggleCategory(player, type), active,
-                    EVENTS_FILTER_ROTATION_Y_DEGREES));
-        }
+        // Filter grid: built at a provisional spot, moved next to the main panel at the end.
+        addFilterGrid(buttons, player, filter, -4.0, 0.05);
 
         // Events list - "Použij na ty události button_list_scroll": one real clickable ButtonData
         // per event (unchanged from before), but now every matching event (up to EVENTS_LIST_LIMIT)
@@ -1058,14 +1328,6 @@ public final class AdminGuiService implements Listener {
                     filter.pickerOffset = 0;
                     openPlayerPicker(player);
                 }, !filter.activePlayers.isEmpty()));
-        // Info panel sits directly under the filter column now that the date row moved out - per
-        // "vlevo ty filtr tlačítka... dej jim tam více prostoru".
-        List<String> infoLines = new ArrayList<>();
-        infoLines.add("Kategorie: " + describeCategories(filter));
-        infoLines.add("Zaznamu: " + events.size() + (events.size() >= EVENTS_LIST_LIMIT ? "+" : ""));
-        // +0.6 (was +0.4): moved down 0.2 - it covered the Shulker button, the 13th filter box.
-        buttons.add(infoTextButton(cx(filterCenterX), cy(lastRowY + 0.6), 0.04, infoLines,
-                EVENTS_FILTER_ROTATION_Y_DEGREES));
 
         // Time-display-mode toggle ("určí si hráč ve filtru") + date range, stacked vertically in
         // the center column - opens the small in-game calendar instead of a chat prompt.
@@ -1095,21 +1357,49 @@ public final class AdminGuiService implements Listener {
         String pageKey = "purrtechlog:events:" + (filter.activeCategories.isEmpty()
                 ? "all" : String.join("+", filter.activeCategories))
                 + ":" + (filter.activePlayers.isEmpty() ? "everyone" : String.join("+", filter.activePlayers));
-        ScreenPageData screen = new ScreenPageData(backgroundPage(), buttons, pageKey, MENU_DISTANCE_PIXELS);
-        DisplayGuiAPI.openMenu(player, screen);
+        // Filter column gets its own panel; the main one only holds the center column - the list
+        // rows carry their own backgrounds, and a panel reaching behind the turned filter/list
+        // cut through them ("zasahuje do seznamu událostí a filtru").
+        // The old "Kategorie / Zaznamu" info box is gone ("klidně i odebral"); the count lives in the title.
+        java.util.function.Predicate<ButtonData> inFilter = b -> b.getId().startsWith("cat-");
+        String filterTitle = "Filtr §7(" + events.size() + (events.size() >= EVENTS_LIST_LIMIT ? "+" : "") + " zaznamu)";
+        Region main = new Region(MAIN_TITLE, inFilter.negate().and(b -> !b.getId().equals("events-list")));
+        Region filterRegion = new Region(filterTitle, inFilter, EVENTS_FILTER_ROTATION_Y_DEGREES);
+        // Slide the turned filter (X and Z together) so its right edge meets the main panel's left
+        // edge, instead of sitting back by the wall ("pravý roh ... stejně s levým rohem").
+        PanelBox mainBox = panelBox(buttons, main), filterBox = panelBox(buttons, filterRegion);
+        if (mainBox != null && filterBox != null) {
+            double dx = mainBox.edgeX(-1) - EVENTS_FILTER_GAP_BLOCKS - filterBox.edgeX(1);
+            double dz = mainBox.edgeZ(-1) - filterBox.edgeZ(1);
+            buttons.removeIf(inFilter);
+            addFilterGrid(buttons, player, filter, -4.0 + dx, 0.05 + dz);
+        }
+        openScreen(player, buttons, pageKey, main, filterRegion);
     }
 
-    /** "vsechny", the labels of up to 2 checked categories, or "N vybranych" for more. */
-    private static String describeCategories(EventsFilter filter) {
-        if (filter.activeCategories.isEmpty()) {
-            return "vsechny";
+    /**
+     * The category filter: 2 columns x 7 rows of compact buttons on ONE plane turned toward the player
+     * (outer column forward) - turning each button in place staggered the columns ("vyrovnej to s
+     * tím druhým sloupcem"). {@code centerX}/{@code baseZ} = the plane's center (relX, z).
+     */
+    private void addFilterGrid(List<ButtonData> buttons, Player player, EventsFilter filter, double centerX, double baseZ) {
+        List<String> categoryButtons = new ArrayList<>();
+        categoryButtons.add("ALL");
+        categoryButtons.addAll(EVENT_CATEGORIES);
+        int columns = 2;
+        double stepX = 2.0, startY = -1.3, stepY = 0.4;
+        double turn = Math.toRadians(EVENTS_FILTER_ROTATION_Y_DEGREES);
+        for (int i = 0; i < categoryButtons.size(); i++) {
+            String type = categoryButtons.get(i);
+            double along = (i % columns - (columns - 1) / 2.0) * stepX;
+            double x = centerX + along * Math.cos(turn);
+            double z = baseZ - along * Math.sin(turn);
+            double y = startY + (i / columns) * stepY;
+            boolean active = type.equals("ALL") ? filter.activeCategories.isEmpty() : filter.activeCategories.contains(type);
+            String label = type.equals("ALL") ? "Vse" : CATEGORY_LABELS.getOrDefault(type, type);
+            buttons.add(compactButton("cat-" + type, cx(x), cy(y), z, label, e -> toggleCategory(player, type), active,
+                    EVENTS_FILTER_ROTATION_Y_DEGREES));
         }
-        if (filter.activeCategories.size() > 2) {
-            return filter.activeCategories.size() + " vybranych";
-        }
-        return filter.activeCategories.stream()
-                .map(type -> CATEGORY_LABELS.getOrDefault(type, type))
-                .collect(java.util.stream.Collectors.joining(", "));
     }
 
     private void toggleCategory(Player player, String type) {
@@ -1144,43 +1434,60 @@ public final class AdminGuiService implements Listener {
     private ButtonData eventRowButton(String id, double x, double y, double z, List<String> lines, ItemStack icon,
                                        float rotationY, Consumer<MenuButtonClickEvent> onClick,
                                        Consumer<MenuActionContext> onHoverStart, Consumer<MenuActionContext> onHoverEnd) {
-        // Text shifted right by half an icon so text + icon together are centered on the button -
-        // the (always centered) hitbox then only needs to be text + icon wide.
-        TextDisplayLayerData text = new TextDisplayLayerData(EVENT_ROW_ICON_BLOCKS / 2.0, 0, -EVENTS_ROW_PULL_BACK_BLOCKS,
-                GUI_PATH, id + "-text", 1)
-                .setText(lines)
-                .setBackground(BUTTON_BACKGROUND);
+        // One card design for every row ("univerzální design"): same-size card, the item in a slot
+        // frame on the left, two left-aligned lines beside it. Offsets go through placeTurned, so the
+        // parts stay on the turned row face (layers rotate around their own anchor).
+        double w = EVENT_ROW_CARD_WIDTH_BLOCKS, h = EVENT_ROW_CARD_HEIGHT_BLOCKS;
+        double back = -EVENTS_ROW_PULL_BACK_BLOCKS;
+        double slotX = -w / 2 + EVENT_ROW_PAD_BLOCKS + EVENT_ROW_SLOT_BLOCKS / 2;
+
+        TextDisplayLayerData text = new TextDisplayLayerData(0, 0, back, GUI_PATH, id + "-text", 1,
+                TRANSPARENT, TextDisplay.TextAlignment.LEFT)
+                .setText(lines);
         text.setAutoFitText(false);
-        double naturalWidthBlocks = text.estimateContentWidthBlocks();
-        if (naturalWidthBlocks > EVENTS_ROW_TARGET_WIDTH_BLOCKS) {
-            float scale = (float) Math.max(COMPACT_MIN_TEXT_SCALE, EVENTS_ROW_TARGET_WIDTH_BLOCKS / naturalWidthBlocks);
+        text.setTextShadow(true);
+        double textLeft = slotX + EVENT_ROW_SLOT_BLOCKS / 2 + EVENT_ROW_PAD_BLOCKS;
+        double room = w / 2 - EVENT_ROW_PAD_BLOCKS - textLeft;
+        double natural = text.estimateContentWidthBlocks();
+        if (natural > room) {
+            float scale = (float) Math.max(COMPACT_MIN_TEXT_SCALE, room / natural);
             text.setScale(new Vector3f(scale, scale, 1f));
         }
-        // setRotationY returns the base DisplayLayerData type, not TextDisplayLayerData - called as
-        // its own statement (not chained) so `text` below still resolves to the
-        // TextDisplayLayerData-only estimate*Blocks() methods. See
-        // [[reference-purrtechdisplaygui-coordinate-rules]].
-        text.setRotationY(rotationY);
+        double tw = text.estimateContentWidthBlocks(), th = text.estimateContentHeightBlocks();
+        placeTurned(text, rotationY, textLeft + tw / 2, (h - th) / 2);
 
-        double textWidthBlocks = text.estimateContentWidthBlocks();
-        double textHeightBlocks = text.estimateContentHeightBlocks();
-
-        // Item icon on the row's left ("na levou stranu toho ještě přidej ten item"), vertically
-        // centered on the text - a text display grows upward from its anchor while an item display
-        // is centered on it, hence the -height/2 (this GUI's local +y = down).
-        ItemDisplayLayerData iconLayer = new ItemDisplayLayerData(
-                -textWidthBlocks / 2.0 + EVENT_ROW_ICON_PULL_IN_BLOCKS, -textHeightBlocks / 2.0,
-                -EVENTS_ROW_PULL_BACK_BLOCKS,
-                GUI_PATH, id + "-icon", 2)
+        ItemDisplayLayerData iconLayer = new ItemDisplayLayerData(0, 0, back, GUI_PATH, id + "-icon", 2)
                 .setItemStack(icon);
         iconLayer.setScale(new Vector3f((float) EVENT_ROW_ICON_BLOCKS, (float) EVENT_ROW_ICON_BLOCKS, (float) EVENT_ROW_ICON_BLOCKS));
-        iconLayer.setRotationY(rotationY);
+        placeTurned(iconLayer, rotationY, slotX, h / 2);
 
-        double widthPixels = Math.max(HITBOX_MIN_WIDTH_PX,
-                (textWidthBlocks + EVENT_ROW_ICON_BLOCKS) * PIXELS_PER_BLOCK + HITBOX_PADDING_PX);
-        double heightPixels = Math.max(HITBOX_HEIGHT_PX,
-                textHeightBlocks * PIXELS_PER_BLOCK + HITBOX_PADDING_PX);
-        LayersData design = new LayersData(List.of(text, iconLayer), GUI_PATH + ":" + id, GUI_PATH);
+        List<DisplayLayerData> layers = new ArrayList<>(List.of(text, iconLayer));
+        // the "-skin" id also tells Skin.apply this row draws its own background
+        DisplayLayerData card = Skin.enabled
+                ? Skin.texture("cme_button", 0, 0, back - 0.02, w, h, 3, GUI_PATH, id + "-skin")
+                : null;
+        if (card == null) {
+            TextDisplayLayerData rect = new TextDisplayLayerData(0, 0, back - 0.02, GUI_PATH, id + "-skin", 3)
+                    .setText(List.of(" "))
+                    .setBackground(BUTTON_BACKGROUND);
+            rect.setAutoFitText(false);
+            rect.setScale(new Vector3f((float) (w / rect.backgroundWidthBlocksAtUnitScale()),
+                    (float) (h / rect.backgroundHeightBlocksAtUnitScale()), 1f));
+            card = placeTurned(rect, rotationY, 0, 0); // text grows up from its anchor = card bottom
+        } else {
+            placeTurned(card, rotationY, 0, h / 2);
+        }
+        layers.add(card);
+        ItemDisplayLayerData slot = Skin.enabled
+                ? Skin.texture("is_shape_icon", 0, 0, back - 0.01, EVENT_ROW_SLOT_BLOCKS, EVENT_ROW_SLOT_BLOCKS, 4, GUI_PATH, id + "-slot")
+                : null;
+        if (slot != null) {
+            layers.add(placeTurned(slot, rotationY, slotX, h / 2));
+        }
+
+        double widthPixels = w * PIXELS_PER_BLOCK;
+        double heightPixels = h * PIXELS_PER_BLOCK;
+        LayersData design = new LayersData(layers, GUI_PATH + ":" + id, GUI_PATH);
         // Not hitboxRecessZ (half the whole width): these rows live inside eventsListButton, whose
         // own scroll hitbox sits behind them, and a row recessed that far would end up behind it and
         // never get hovered/clicked. The rows are rotated, so their hitbox is 0.5-block tiles along
@@ -1194,7 +1501,9 @@ public final class AdminGuiService implements Listener {
                 .onLeftClick(onClick)
                 .onHoverStart(onHoverStart)
                 .onHoverEnd(onHoverEnd)
-                .hitboxOffsetZ(EVENTS_ROW_HITBOX_RECESS_Z)
+                // a flat row is one Interaction as deep as it is wide - recess it like the picker rows
+                .hitboxOffsetZ(rotationY != 0f ? EVENTS_ROW_HITBOX_RECESS_Z
+                        : hitboxRecessZ(widthPixels) - EVENTS_ROW_PULL_BACK_BLOCKS * PIXELS_PER_BLOCK)
                 .build();
     }
 
@@ -1245,7 +1554,7 @@ public final class AdminGuiService implements Listener {
                     hoverPreview ? ctx -> scheduleEventPreviewHide(player) : null));
         }
 
-        double widthPixels = (EVENTS_ROW_TARGET_WIDTH_BLOCKS + EVENT_ROW_ICON_BLOCKS) * PIXELS_PER_BLOCK + HITBOX_PADDING_PX;
+        double widthPixels = EVENT_ROW_CARD_WIDTH_BLOCKS * PIXELS_PER_BLOCK + HITBOX_PADDING_PX;
         return scrollFrame(listId, x, y, z, rows, widthPixels, rowSpacingBlocks);
     }
 
@@ -1300,10 +1609,20 @@ public final class AdminGuiService implements Listener {
     // === Player picker: its own menu (opened from the "Hraci" button on the events page) listing everyone
     // with a record, any number of whom can be checked. ===
 
-    private static final int PICKER_VISIBLE_ROWS = 6;
-    private static final double PICKER_ROW_STEP = 0.45;
+    // 6 rows x 0.45 -> 5 x 0.6: the rows sat too close together ("seznam hráčů je moc blízko");
+    // the list grows upward from its bottom row, so the top moved up and the page title with it
+    // (the panel puts the title above whatever is highest).
+    private static final int PICKER_VISIBLE_ROWS = 5;
+    private static final double PICKER_ROW_STEP = 0.6;
     private static final double PICKER_WIDTH_BLOCKS = 2.6;
-    private static final double PICKER_TOP_Y = -1.3;
+    private static final double PICKER_TOP_Y = -1.7;
+    /** Depth of a NOT turned list (player picker, item history; blocks, + = toward the player). Was EVENTS_LIST_Z (0.75), which with
+     * the list's +0.5 row push and -0.3 pull-back left the rows ~0.95 in front ("moc vyčuhuje");
+     * -0.15 puts them flush with the side buttons (0.05). Bigger = closer. */
+    private static final double FLAT_LIST_Z = -0.15;
+    /** Side columns (info left, search right): center offset from the list's center. */
+    private static final double PICKER_SIDE_X = 3.0;
+    private static final double PICKER_SIDE_Y = -0.6;
 
     public void openPlayerPicker(Player player) {
         EventsFilter filter = eventsFilters.computeIfAbsent(player.getUniqueId(), id -> new EventsFilter());
@@ -1327,10 +1646,14 @@ public final class AdminGuiService implements Listener {
                 new java.util.concurrent.atomic.AtomicReference<>();
 
         List<ButtonData> rows = new ArrayList<>();
+        String query = filter.pickerQuery != null ? filter.pickerQuery.toLowerCase(java.util.Locale.ROOT) : null;
         for (EventDao.PlayerOption option : players) {
             String uuid = option.uuid();
             boolean checked = filter.activePlayers.contains(uuid);
             String name = option.name() != null ? option.name() : uuid.substring(0, 8);
+            if (query != null && !name.toLowerCase(java.util.Locale.ROOT).contains(query) && !uuid.startsWith(query)) {
+                continue;
+            }
             TextDisplayLayerData text = new TextDisplayLayerData(0, 0, -EVENTS_ROW_PULL_BACK_BLOCKS, GUI_PATH,
                     "player-" + uuid + "-text", 1)
                     .setText(List.of((checked ? "[x] " : "[ ] ") + name))
@@ -1366,18 +1689,29 @@ public final class AdminGuiService implements Listener {
 
         double bottomRowY = PICKER_TOP_Y + (PICKER_VISIBLE_ROWS - 1) * PICKER_ROW_STEP;
         if (rows.isEmpty()) {
-            buttons.add(buildStaticText("players-empty", cx(0), cy(0), 0.05, List.of("(zadne zaznamy o hracich)")));
+            buttons.add(buildStaticText("players-empty", cx(0), cy(0), 0.05,
+                    List.of(query != null ? "(zadny hrac neodpovida)" : "(zadne zaznamy o hracich)")));
         } else {
-            ButtonListScrollButtonData list = scrollFrame("players-list", cx(0), cy(bottomRowY), EVENTS_LIST_Z, rows,
+            ButtonListScrollButtonData list = scrollFrame("players-list", cx(0), cy(bottomRowY), FLAT_LIST_Z, rows,
                     (PICKER_WIDTH_BLOCKS + 0.2) * PIXELS_PER_BLOCK, PICKER_ROW_STEP, PICKER_VISIBLE_ROWS);
             list.setCurrentOffset(filter.pickerOffset); // clamped to the list's range by DisplayGUI
             listRef.set(list);
             buttons.add(list);
         }
 
-        List<String> infoLines = List.of("Vyber hrace - klikni na vice hracu",
+        // Explanation beside the list (was above it, under the page title).
+        List<String> infoLines = List.of("Klik na hrace = vybrat", "nebo zrusit vyber.", "Lze vybrat vice hracu.", "",
                 filter.activePlayers.isEmpty() ? "Vybrano: nikdo (= vsichni)" : "Vybrano: " + filter.activePlayers.size());
-        buttons.add(buildStaticText("players-info", cx(0), cy(PICKER_TOP_Y - 0.45), 0.05, infoLines));
+        buttons.add(buildStaticText("players-info", cx(-PICKER_SIDE_X), cy(PICKER_SIDE_Y), 0.05, infoLines));
+        buttons.add(navButton("players-search", cx(PICKER_SIDE_X), cy(PICKER_SIDE_Y - 0.2), 0.05,
+                query != null ? "Hledat: " + filter.pickerQuery : "Hledat hrace (chat)", e -> beginPickerSearch(player), query != null));
+        if (query != null) {
+            buttons.add(navButton("players-search-clear", cx(PICKER_SIDE_X), cy(PICKER_SIDE_Y + 0.2), 0.05, "Zrusit hledani", e -> {
+                filter.pickerQuery = null;
+                filter.pickerOffset = 0;
+                openPlayerPicker(player);
+            }));
+        }
         buttons.add(navButton("players-clear", cx(-1.3), cy(bottomRowY + 0.55), 0.05, "Vsichni hraci", e -> {
             filter.activePlayers.clear();
             filter.pickerOffset = 0;
@@ -1385,12 +1719,11 @@ public final class AdminGuiService implements Listener {
         }, filter.activePlayers.isEmpty()));
         buttons.add(navButton("players-done", cx(1.3), cy(bottomRowY + 0.55), 0.05, "Hotovo", e -> {
             filter.pickerOffset = 0;
+            filter.pickerQuery = null;
             openEventsPage(player);
         }));
 
-        ScreenPageData screen = new ScreenPageData(backgroundPage(), buttons,
-                "purrtechlog:players:" + String.join("+", filter.activePlayers), MENU_DISTANCE_PIXELS);
-        DisplayGuiAPI.openMenu(player, screen);
+        openScreen(player, buttons, "purrtechlog:players:" + String.join("+", filter.activePlayers));
     }
 
     /** Row text for {@link #eventRowButton}: line 1 = ID (left-most - "ID se bude ukazovat na levé
@@ -1401,11 +1734,19 @@ public final class AdminGuiService implements Listener {
         String time = relativeTime ? EventLineFormatter.formatTimeAgo(e.timestamp()) : formatTime(e.timestamp());
         String who = e.playerUuid() != null ? resolvePlayerAlias(e.playerUuid()) : "?";
         String action = CATEGORY_LABELS.getOrDefault(e.eventType(), e.eventType());
-        String line1 = "#" + e.id() + "  " + time + "  Player: " + who + " - " + action;
-        String line2 = e.world() != null
-                ? "world: " + e.world() + " " + e.x() + " " + e.y() + " " + e.z()
-                : "world: neznamy";
-        return List.of(line1, line2);
+        String where = e.world() != null ? e.world() + " " + e.x() + " " + e.y() + " " + e.z() : "svet neznamy";
+        return List.of(
+                actionColour(e.eventType()) + action + MUTED + "  #" + e.id() + LABEL + "  " + who,
+                MUTED + time + "  |  " + where);
+    }
+
+    /** Red for an item leaving the world, green for one coming in, white otherwise. */
+    private static String actionColour(String eventType) {
+        return switch (eventType) {
+            case "DESTROYED", "CREATIVE_DUPLICATE", "VANISHED_BY_COMMAND" -> BAD;
+            case "GENESIS", "SPAWNED", "REAPPEARED_AFTER_COMMAND" -> GOOD;
+            default -> VALUE;
+        };
     }
 
     // === Events page hover item preview - hovering a row shows the item it's about in a panel
@@ -1414,19 +1755,21 @@ public final class AdminGuiService implements Listener {
 
     /** Rendered size (blocks) of each row's item icon - see {@link #eventRowButton}. */
     private static final double EVENT_ROW_ICON_BLOCKS = 0.45;
-    /** How far (blocks) each row's icon is pulled right, toward its text ("dát spíše blíže k tomu
-     * seznamu"). 0 = icon edge exactly on the ESTIMATED text edge; the estimate runs a bit wide,
-     * which left a visible gap. Bigger = closer; too big and the icon overlaps the text. */
-    private static final double EVENT_ROW_ICON_PULL_IN_BLOCKS = 0.2;
+    /** Every row's card (blocks): same size for all rows, so the list reads as one column of cards.
+     * Height must stay under the list's row step (0.65 on the events page). */
+    private static final double EVENT_ROW_CARD_WIDTH_BLOCKS = EVENTS_ROW_TARGET_WIDTH_BLOCKS + EVENT_ROW_ICON_BLOCKS;
+    private static final double EVENT_ROW_CARD_HEIGHT_BLOCKS = 0.58;
+    /** Item slot frame on the card's left, and the air between card edge / slot / text. */
+    private static final double EVENT_ROW_SLOT_BLOCKS = 0.5, EVENT_ROW_PAD_BLOCKS = 0.06;
     private static final String EVENT_PREVIEW_ID = "event-preview";
     /** Preview panel center, relative to the list column's center: half the widest row
      * (text + icon), plus a small gap, plus half the panel. Not yet confirmed in-game. */
     // Was 3.8 - moved closer to the list ("dej více blíže"); the stronger tilt below also narrows
     // how wide the panel looks, so it fits closer without touching the rows.
     private static final double EVENT_PREVIEW_OFFSET_X = 2.0;
-    private static final double EVENT_PREVIEW_WIDTH_BLOCKS = 2.8;
-    private static final double EVENT_PREVIEW_HEIGHT_BLOCKS = 3.0;
-    private static final double EVENT_PREVIEW_ITEM_BLOCKS = 0.7;
+    private static final double EVENT_PREVIEW_WIDTH_BLOCKS = 3.2;
+    private static final double EVENT_PREVIEW_HEIGHT_BLOCKS = 3.25; // = the list's 5 rows x 0.65
+    private static final double EVENT_PREVIEW_ITEM_BLOCKS = 0.55; // inside the 0.8-block item frame
     /** Angled back toward the player more than the list, since it sits even further right. */
     private static final float EVENT_PREVIEW_ROTATION_Y_DEGREES = -55f;
     /** Depth (blocks, + = toward the player). Was 0.05, same plane as the list - the panel then
@@ -1466,7 +1809,7 @@ public final class AdminGuiService implements Listener {
         return ButtonData.builder()
                 .at(x, y, z)
                 .size(widthPixels, EVENT_PREVIEW_HEIGHT_BLOCKS * PIXELS_PER_BLOCK)
-                .layers(eventPreviewDesign(null, List.of(" "), TRANSPARENT))
+                .layers(eventPreviewDesign(PreviewContent.HIDDEN))
                 .id(EVENT_PREVIEW_ID)
                 .onLeftClick(e -> openPreviewedItem(player))
                 .onHoverStart(ctx -> {
@@ -1485,29 +1828,98 @@ public final class AdminGuiService implements Listener {
                 .build();
     }
 
-    /** Text (position 1) with the item (position 2) above it. Always the same two positions so
-     * {@link Button#updateButton(ButtonData)} can swap content in place without respawning. */
-    private LayersData eventPreviewDesign(ItemStack item, List<String> lines, Color background) {
-        TextDisplayLayerData text = new TextDisplayLayerData(0, 0, 0, GUI_PATH, EVENT_PREVIEW_ID + "-text", 1)
-                .setText(lines)
-                .setBackground(background);
-        text.setAutoFitText(false);
-        double naturalWidthBlocks = text.estimateContentWidthBlocks();
-        if (naturalWidthBlocks > EVENT_PREVIEW_WIDTH_BLOCKS) {
-            float scale = (float) Math.max(COMPACT_MIN_TEXT_SCALE, EVENT_PREVIEW_WIDTH_BLOCKS / naturalWidthBlocks);
-            text.setScale(new Vector3f(scale, scale, 1f));
-        }
-        text.setRotationY(EVENT_PREVIEW_ROTATION_Y_DEGREES);
-        double textHeightBlocks = text.estimateContentHeightBlocks();
+    /** Preview layout (blocks, panel-local: x right of the panel's center, y UP from its bottom edge). */
+    private static final double PREVIEW_PAD = 0.18;
+    private static final double PREVIEW_ICON_FRAME_BLOCKS = 0.8;
+    private static final double PREVIEW_HEADER_HEIGHT = 0.75;
+    private static final float PREVIEW_MIN_TEXT_SCALE = 0.35f;
 
-        ItemDisplayLayerData itemLayer = new ItemDisplayLayerData(
-                0, -(textHeightBlocks + EVENT_PREVIEW_ITEM_BLOCKS / 2.0 + 0.1), 0,
-                GUI_PATH, EVENT_PREVIEW_ID + "-item", 2)
-                .setItemStack(item != null ? item : new ItemStack(Material.AIR));
+    /** One preview's content; {@code item == null} = hidden (blank, no background). */
+    private record PreviewContent(ItemStack item, String title, String subtitle, List<String> body) {
+        static final PreviewContent HIDDEN = new PreviewContent(null, " ", " ", List.of(" "));
+    }
+
+    /**
+     * The hover preview, every layer at a fixed position so {@link Button#updateButton(ButtonData)}
+     * can swap the content in place: 1 body text, 2 item, 3 header (name + material) right of the
+     * item, 4 item frame, 5 panel. Panel and frame are only drawn while something is shown
+     * ("dej to tam jen když se fakt objeví ten item"). All layers sit at the button origin and are
+     * placed by a translation turned with the panel, so the whole panel tilts as one piece.
+     */
+    private LayersData eventPreviewDesign(PreviewContent content) {
+        boolean shown = content.item() != null;
+        double w = EVENT_PREVIEW_WIDTH_BLOCKS, h = EVENT_PREVIEW_HEIGHT_BLOCKS;
+        double iconX = -w / 2 + PREVIEW_PAD + PREVIEW_ICON_FRAME_BLOCKS / 2;
+        double iconY = h - PREVIEW_PAD - PREVIEW_ICON_FRAME_BLOCKS / 2;
+
+        ItemDisplayLayerData itemLayer = new ItemDisplayLayerData(0, 0, 0, GUI_PATH, EVENT_PREVIEW_ID + "-item", 2)
+                .setItemStack(shown ? content.item() : new ItemStack(Material.AIR));
         float itemScale = (float) EVENT_PREVIEW_ITEM_BLOCKS;
         itemLayer.setScale(new Vector3f(itemScale, itemScale, itemScale));
-        itemLayer.setRotationY(EVENT_PREVIEW_ROTATION_Y_DEGREES);
-        return new LayersData(List.of(text, itemLayer), GUI_PATH + ":" + EVENT_PREVIEW_ID, GUI_PATH);
+        previewPlace(itemLayer, iconX, iconY);
+
+        // header: right of the item frame, vertically centered on it
+        double headerLeft = iconX + PREVIEW_ICON_FRAME_BLOCKS / 2 + PREVIEW_PAD;
+        TextDisplayLayerData header = previewText(3, List.of(content.title(), content.subtitle()),
+                w / 2 - PREVIEW_PAD - headerLeft, PREVIEW_HEADER_HEIGHT);
+        previewPlace(header, headerLeft + header.estimateContentWidthBlocks() / 2,
+                iconY - header.estimateContentHeightBlocks() / 2);
+
+        // body: under the header, top-aligned, left-aligned
+        double bodyTop = h - 2 * PREVIEW_PAD - PREVIEW_ICON_FRAME_BLOCKS;
+        TextDisplayLayerData body = previewText(1, content.body(),
+                w - 2 * PREVIEW_PAD, bodyTop - PREVIEW_PAD);
+        // without the texture the body text carries the panel colour instead
+        // Built (and hidden) in the empty state too: a design adds layers, and updateButton needs the
+        // same layer positions in both states.
+        DisplayLayerData panel = Skin.enabled
+                ? Skin.texture("display_entity_configuration", 0, 0, -0.03, w, h, 5, GUI_PATH, EVENT_PREVIEW_ID + "-skin") : null;
+        body.setBackground(shown && panel == null ? PANEL_BACKGROUND : TRANSPARENT);
+        previewPlace(body, -w / 2 + PREVIEW_PAD + body.estimateContentWidthBlocks() / 2,
+                bodyTop - body.estimateContentHeightBlocks());
+
+        DisplayLayerData frame = Skin.enabled
+                ? Skin.texture("is_shape_icon", 0, 0, -0.01, PREVIEW_ICON_FRAME_BLOCKS, PREVIEW_ICON_FRAME_BLOCKS, 4, GUI_PATH, EVENT_PREVIEW_ID + "-frame") : null;
+        frame = frame != null ? previewPlace(frame, iconX, iconY) : hiddenPreviewLayer(4, "-frame");
+        panel = panel != null ? previewPlace(panel, 0, h / 2) : hiddenPreviewLayer(5, "-skin");
+        if (!shown) {
+            Skin.hide(frame);
+            Skin.hide(panel);
+        }
+        return Skin.expand(new LayersData(List.of(body, itemLayer, header, frame, panel), GUI_PATH + ":" + EVENT_PREVIEW_ID, GUI_PATH));
+    }
+
+    /** Left-aligned preview text shrunk to fit {@code maxWidth x maxHeight} blocks (never wraps). */
+    private static TextDisplayLayerData previewText(int position, List<String> lines, double maxWidth, double maxHeight) {
+        TextDisplayLayerData text = new TextDisplayLayerData(0, 0, 0, GUI_PATH, EVENT_PREVIEW_ID + "-text" + position, position,
+                TRANSPARENT, TextDisplay.TextAlignment.LEFT)
+                .setText(lines);
+        text.setAutoFitText(false);
+        text.setTextShadow(true);
+        double scale = Math.min(1, Math.min(maxWidth / Math.max(0.01, text.estimateContentWidthBlocks()),
+                maxHeight / Math.max(0.01, text.estimateContentHeightBlocks())));
+        float s = (float) Math.max(PREVIEW_MIN_TEXT_SCALE, scale);
+        text.setScale(new Vector3f(s, s, 1f));
+        return text;
+    }
+
+    /** Turns the layer with the panel and moves it to panel-local (x, yUp) - see {@link #eventPreviewDesign}. */
+    private static <T extends DisplayLayerData> T previewPlace(T layer, double x, double yUp) {
+        return placeTurned(layer, EVENT_PREVIEW_ROTATION_Y_DEGREES, x, yUp);
+    }
+
+    /** Turns {@code layer} by {@code rotationY} and moves it {@code x} right / {@code yUp} up along the
+     * turned face - layers rotate around their own anchor, so offsets must be turned with them. */
+    private static <T extends DisplayLayerData> T placeTurned(T layer, float rotationY, double x, double yUp) {
+        layer.setRotationY(rotationY);
+        layer.setTranslation(layer.getRotationQuaternion()
+                .transform(new Vector3f(layer.getTranslation()).add((float) x, (float) yUp, 0f)));
+        return layer;
+    }
+
+    private static ItemDisplayLayerData hiddenPreviewLayer(int position, String suffix) {
+        return new ItemDisplayLayerData(0, 0, 0, GUI_PATH, EVENT_PREVIEW_ID + suffix, position)
+                .setItemStack(new ItemStack(Material.AIR));
     }
 
     /** Row hover start: show this event's item right away, replacing whatever was shown. */
@@ -1524,23 +1936,25 @@ public final class AdminGuiService implements Listener {
 
         if (state.shulkerEvent) {
             ShulkerSessionLog.Session session = ShulkerSessionLog.parse(ev.detail());
-            List<String> lines = new ArrayList<>();
-            lines.add("Shulker #" + ev.id());
+            List<String> body = new ArrayList<>();
+            String mode = "?";
             if (session != null) {
                 List<ShulkerSessionLog.SlotDiff> diffs = ShulkerSessionLog.diff(session.before(), session.after());
-                lines.add(ShulkerSessionLog.MODE_HELD.equals(session.mode()) ? "Otevren v ruce" : "Polozeny shulker");
-                lines.add("Kde: " + (ev.world() != null ? ev.world() + " " + ev.x() + " " + ev.y() + " " + ev.z() : "?"));
-                lines.add("Pridal: " + ShulkerSessionLog.totalAdded(diffs) + " ks");
-                lines.add("Vzal: " + ShulkerSessionLog.totalRemoved(diffs) + " ks");
+                mode = ShulkerSessionLog.MODE_HELD.equals(session.mode()) ? "otevren v ruce" : "polozeny shulker";
+                body.add(LABEL + "Kde: " + VALUE + (ev.world() != null ? ev.world() + " " + ev.x() + " " + ev.y() + " " + ev.z() : "?"));
+                body.add("");
+                body.add(LABEL + "Pridal: " + GOOD + ShulkerSessionLog.totalAdded(diffs) + " ks");
+                body.add(LABEL + "Vzal: " + BAD + ShulkerSessionLog.totalRemoved(diffs) + " ks");
             }
-            lines.add("> Klikni pro obsah shulkeru");
-            applyEventPreview(player, rowIcon, lines, PANEL_BACKGROUND);
+            body.add("");
+            body.add(HINT + "> Klikni pro obsah shulkeru");
+            applyEventPreview(player, new PreviewContent(rowIcon, VALUE + "Shulker #" + ev.id(), LABEL + mode, body));
             return;
         }
 
         if (ev.unitUuid() == null) {
-            applyEventPreview(player, new ItemStack(Material.BARRIER),
-                    List.of("Udalost #" + ev.id(), "Tento event neobsahuje", "zadny item."), PANEL_BACKGROUND);
+            applyEventPreview(player, new PreviewContent(new ItemStack(Material.BARRIER), VALUE + "Udalost #" + ev.id(),
+                    LABEL + "bez itemu", List.of(LABEL + "Tento event neobsahuje", LABEL + "zadny item.")));
             return;
         }
         String unitUuid = ev.unitUuid();
@@ -1549,7 +1963,7 @@ public final class AdminGuiService implements Listener {
             renderUnitPreview(player, unitUuid, cached, rowIcon);
             return;
         }
-        applyEventPreview(player, rowIcon, List.of("Nacitam...", unitUuid), PANEL_BACKGROUND);
+        applyEventPreview(player, new PreviewContent(rowIcon, VALUE + "Nacitam...", MUTED + shortUuid(unitUuid), List.of(" ")));
         Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
             try {
                 Optional<HistoryService.UnitHistory> history = historyService.lookup(unitUuid);
@@ -1574,27 +1988,38 @@ public final class AdminGuiService implements Listener {
         // Amount/enchants/name aren't stored in the DB - they're read off the real item wherever
         // it last was, if that's currently loaded (online player / loaded chunk).
         ItemStack live = findLiveItem(unitUuid, data.location());
-        List<String> lines = new ArrayList<>();
-        lines.add(itemTitle(live, data.material()));
-        lines.add("UUID: " + unitUuid);
-        lines.add("Material: " + (data.material() != null ? data.material() : "?"));
+        // split into sections (the item / its existence / where it is) so it reads at a glance
+        List<String> body = new ArrayList<>();
         if (live != null) {
-            lines.add("Mnozstvi: " + live.getAmount() + " ks ve stacku");
-            lines.add("Enchanty: " + formatEnchants(live));
+            body.add(LABEL + "Mnozstvi: " + VALUE + live.getAmount() + " ks");
+            body.add(LABEL + "Enchanty: " + VALUE + formatEnchants(live));
         } else {
-            lines.add("Mnozstvi/enchanty: ? (item neni nacteny)");
+            body.add(LABEL + "Mnozstvi a enchanty: " + MUTED + "item neni nacteny");
         }
+        body.add("");
         TrackedUnitRecord unit = data.unit();
         if (unit != null) {
-            lines.add("Stav: " + (unit.alive() ? "existuje" : "znicen (" + unit.destroyedCause() + ")"));
-            lines.add("Vznik: " + formatTime(unit.genesisAt()) + " (" + unit.origin() + ")");
+            body.add(LABEL + "Stav: " + (unit.alive() ? GOOD + "existuje" : BAD + "znicen " + LABEL + "(" + unit.destroyedCause() + ")"));
+            body.add(LABEL + "Vznik: " + VALUE + formatTime(unit.genesisAt()));
+            body.add(LABEL + "Puvod: " + VALUE + unit.origin());
         } else {
-            lines.add("Stav: neni v DB");
+            body.add(LABEL + "Stav: " + BAD + "neni v DB");
         }
-        lines.add("Poloha: " + formatUnitLocation(data.location()));
-        lines.add("Udalosti: " + data.eventCount());
-        lines.add("> Klikni pro detail a historii");
-        applyEventPreview(player, live != null ? live : rowIcon, lines, PANEL_BACKGROUND);
+        body.add("");
+        body.add(LABEL + "Poloha: " + VALUE + formatUnitLocation(data.location()));
+        body.add(LABEL + "Udalosti: " + VALUE + data.eventCount());
+        body.add("");
+        body.add(HINT + "> Klikni pro detail a historii");
+        applyEventPreview(player, new PreviewContent(live != null ? live : rowIcon, VALUE + itemTitle(live, data.material()),
+                LABEL + (data.material() != null ? data.material() : "?") + "  " + MUTED + shortUuid(unitUuid), body));
+    }
+
+    /** Text colours for the preview (legacy codes, rendered by DisplayGUI's text layers). */
+    private static final String LABEL = "§7", VALUE = "§f", GOOD = "§a", BAD = "§c", MUTED = "§8", HINT = "§e";
+
+    /** First block of a UUID - the full one doesn't fit the panel; the detail page shows it whole. */
+    private static String shortUuid(String uuid) {
+        return uuid.length() > 8 ? uuid.substring(0, 8) + "..." : uuid;
     }
 
     private static String itemTitle(ItemStack live, String material) {
@@ -1674,16 +2099,16 @@ public final class AdminGuiService implements Listener {
         return item.clone();
     }
 
-    private void applyEventPreview(Player player, ItemStack item, List<String> lines, Color background) {
+    private void applyEventPreview(Player player, PreviewContent content) {
         Button preview = findOpenButton(player, EVENT_PREVIEW_ID);
         if (preview == null) {
             return; // events page no longer open
         }
-        ButtonData content = ButtonData.builder()
-                .layers(eventPreviewDesign(item, lines, background))
+        ButtonData data = ButtonData.builder()
+                .layers(eventPreviewDesign(content))
                 .id(EVENT_PREVIEW_ID)
                 .build();
-        preview.updateButton(content);
+        preview.updateButton(data);
     }
 
     /** The live top-level button with this id in the player's currently open menu, or null. Used
@@ -1720,7 +2145,7 @@ public final class AdminGuiService implements Listener {
             state.hideTask = null;
             state.shownKey = null;
             state.unitUuid = null;
-            applyEventPreview(player, null, List.of(" "), TRANSPARENT);
+            applyEventPreview(player, PreviewContent.HIDDEN);
         }, EVENT_PREVIEW_LINGER_TICKS);
     }
 
@@ -1782,26 +2207,25 @@ public final class AdminGuiService implements Listener {
         // same page you teleported FROM", i.e. this detail page, not the list behind it.
         lastPage.put(player.getUniqueId(), () -> openEventDetail(player, event.id()));
 
-        List<String> infoLines = new ArrayList<>();
-        infoLines.add("Udalost #" + event.id() + " - " + CATEGORY_LABELS.getOrDefault(event.eventType(), event.eventType()));
-        infoLines.add("Cas: " + formatTime(event.timestamp()));
-        infoLines.add(event.playerUuid() != null ? "Player: " + resolvePlayerAlias(event.playerUuid()) : "Player: neznamy");
-        if (event.gamemode() != null) {
-            infoLines.add("Gamemode: " + event.gamemode());
-        }
-        infoLines.add(event.world() != null
-                ? "world: " + event.world() + " " + event.x() + " " + event.y() + " " + event.z()
-                : "world: neznamy");
-        String detail = EventLineFormatter.formatDetail(event.detail());
-        if (!detail.isEmpty()) {
-            infoLines.add("Detail: " + detail);
-        }
-
         // "taky třeba ukládej informace kdo byl v okolí třeba 50 blocků" - captured at write-time by
         // NearbyPlayers.capture, shown here as its own scrollable list.
         List<String> nearbyLines = event.nearbyPlayers() != null
                 ? List.of(event.nearbyPlayers().split(","))
                 : List.of();
+
+        List<String> infoLines = new ArrayList<>();
+        infoLines.add(actionColour(event.eventType()) + CATEGORY_LABELS.getOrDefault(event.eventType(), event.eventType())
+                + MUTED + "  #" + event.id());
+        infoLines.add(LABEL + "Cas: " + VALUE + formatTime(event.timestamp()));
+        infoLines.add(LABEL + "Hrac: " + VALUE + (event.playerUuid() != null ? resolvePlayerAlias(event.playerUuid()) : "neznamy")
+                + (event.gamemode() != null ? MUTED + " (" + event.gamemode() + ")" : ""));
+        infoLines.add(LABEL + "Misto: " + VALUE + (event.world() != null
+                ? event.world() + " " + event.x() + " " + event.y() + " " + event.z() : "nezname"));
+        String detail = EventLineFormatter.formatDetail(event.detail());
+        if (!detail.isEmpty()) {
+            infoLines.add(LABEL + "Detail: " + VALUE + detail);
+        }
+        infoLines.add(LABEL + "V okoli: " + VALUE + nearbyLines.size() + LABEL + " hracu (seznam nize)");
 
         boolean hasLocation = event.world() != null && event.x() != null && event.y() != null && event.z() != null;
 
@@ -1813,12 +2237,13 @@ public final class AdminGuiService implements Listener {
         double infoX = 0;
         if (shulker != null) {
             infoX = -2.4;
-            infoLines.add(1, "Shulker: " + shulker.shulkerMaterial() + " ("
+            infoLines.add(1, LABEL + "Shulker: " + VALUE + shulker.shulkerMaterial() + MUTED + " ("
                     + (ShulkerSessionLog.MODE_HELD.equals(shulker.mode()) ? "otevren v ruce" : "polozeny") + ")");
             addShulkerGridButtons(buttons, shulker);
         }
-        buttons.add(infoTextButton(cx(infoX), cy(-1.3), 0.05, infoLines));
-        buttons.add(scrollListButton("event-nearby", cx(infoX), cy(0.3), 0.05, nearbyLines,
+        // info bottom / list bottom: the list is only TEXT_LIST_ROWS lines now, so both moved down
+        buttons.add(infoCard("info", cx(infoX), cy(-0.8), 0.05, infoLines));
+        buttons.add(scrollListButton("event-nearby", cx(infoX), cy(0.6), 0.05, nearbyLines,
                 "(nikdo v okoli " + (int) NearbyPlayers.DEFAULT_RADIUS_BLOCKS + " bloku)"));
         if (hasLocation) {
             buttons.add(navButton("teleport", cx(-1.0), cy(1.4), 0.05, "Teleportovat", e -> teleportToEvent(player, event)));
@@ -1827,8 +2252,7 @@ public final class AdminGuiService implements Listener {
             buttons.add(navButton("back", cx(0), cy(1.4), -0.05, "Zpet na seznam", e -> openEventsPage(player)));
         }
 
-        ScreenPageData screen = new ScreenPageData(backgroundPage(), buttons, "purrtechlog:event:" + event.id(), MENU_DISTANCE_PIXELS);
-        DisplayGuiAPI.openMenu(player, screen);
+        openScreen(player, buttons, "purrtechlog:event:" + event.id());
     }
 
     // === Shulker session grid - "když to bude shulker tak ti to ukáže... co v něm bylo a co vzal
@@ -1971,13 +2395,7 @@ public final class AdminGuiService implements Listener {
         TextDisplayLayerData text = new TextDisplayLayerData(0, 0, 0, GUI_PATH, id + "-text", 1)
                 .setText(lines)
                 .setBackground(PANEL_BACKGROUND);
-        return ButtonData.builder()
-                .at(x, y, z)
-                .size(30, 10)
-                .layers(new LayersData(List.of(text), GUI_PATH + ":" + id, GUI_PATH))
-                .id(id)
-                .hitboxOffsetZ(hitboxRecessZ(30))
-                .build();
+        return textBlock(id, x, y, z, text);
     }
 
     /** "když na to klikneš tak tě to tam portne" - teleports to the event's recorded block
@@ -2196,8 +2614,7 @@ public final class AdminGuiService implements Listener {
         buttons.add(navButton("cal-manual", cx(centerX + 0.9), cy(afterGridY), 0.05, "Napsat rucne", e -> beginManualDateInput(player)));
 
         String pageKey = "purrtechlog:calendar:" + (state.from ? "from" : "to") + ":" + state.month;
-        ScreenPageData screen = new ScreenPageData(backgroundPage(), buttons, pageKey, MENU_DISTANCE_PIXELS);
-        DisplayGuiAPI.openMenu(player, screen);
+        openScreen(player, buttons, pageKey);
     }
 
     // === On-screen keyboard: menu-only free-text entry (UUID search for now; player search and
@@ -2259,8 +2676,7 @@ public final class AdminGuiService implements Listener {
         buttons.add(navButton("kb-manual", cx(0), cy(controlY + 1.0), 0.05, 60, 7, "Napsat do chatu",
                 e -> beginManualKeyboardInput(player)));
 
-        ScreenPageData screen = new ScreenPageData(backgroundPage(), buttons, "purrtechlog:keyboard:" + typed.length(), MENU_DISTANCE_PIXELS);
-        DisplayGuiAPI.openMenu(player, screen);
+        openScreen(player, buttons, "purrtechlog:keyboard:" + typed.length());
     }
 
     private void appendKeyboardChar(Player player, String key) {

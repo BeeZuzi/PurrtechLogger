@@ -43,10 +43,16 @@ ledger:
 
 # Admin GUI (/purrlog gui) - needs PurrTechDisplayGUI.
 gui:
-  # Draw an ItemsAdder texture behind every button (falls back to plain coloured buttons when
-  # ItemsAdder or the item is missing).
-  textures: true
-  button-texture: "king:mp_button_click_me"
+  # Texturova varianta menu: ItemsAdder textury z namespace "king" (panel za menu, ramecek za kazdym
+  # tlacitkem, slot za tlacitky s ikonou). Bez ItemsAdderu nebo chybejici textury zustane klasicke menu.
+  textures:
+    enabled: true
+    # Vlastni vzhled misto vestavenych textur: nazev designu z DisplayGUI (designs/*.yml, vytvoris ho
+    # v /displaygui editoru). Design se roztahne tak, aby jeho rodicovska (nejnizsi) vrstva pokryla
+    # tlacitko / panel / slot, ostatni vrstvy si drzi pozici vuci ni. Prazdne = vestavena textura.
+    button-design: ""
+    panel-design: ""
+    slot-design: ""
 
 # Nouzovy vypinac sledovani predmetu (meni se prikazem /purrlog tracking off|on).
 # false = pluginu se odeberou vsechny znacky (UUID) z predmetu a prestane je znacit; bloky se sleduji dal.
