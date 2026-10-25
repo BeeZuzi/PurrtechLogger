@@ -13,6 +13,47 @@ import java.util.stream.Stream;
 public class PluginRemover {
 
     /**
+     * Smaže pouze JAR soubor pluginu a ponechá jeho datovou složku (configy, data apod.).
+     *
+     * @param self tvůj vlastní plugin (this)
+     * @param name jméno pluginu ke smazání; pokud je to jméno self, smaže se plugin sám sebe
+     * @return false pokud plugin neexistuje
+     */
+    public static boolean removeJarOnly(Plugin self, String name) {
+        Plugin target = Bukkit.getPluginManager().getPlugin(name);
+        if (target == null) return false;
+
+        File jar = jarOf(target);
+
+        if (target == self) {                       // sám sebe nejde smazat za běhu -> po vypnutí JVM
+            deleteJarOnShutdown(jar);
+            Bukkit.getPluginManager().disablePlugin(target);
+            return true;
+        }
+
+        Bukkit.getPluginManager().disablePlugin(target);
+        try {                                       // uvolní zámek jaru (nutné na Windows)
+            if (target.getClass().getClassLoader() instanceof Closeable c) c.close();
+        } catch (Exception ignored) { }
+
+        if (!deleteJar(jar)) deleteJarOnShutdown(jar); // fallback, kdyby byl soubor stále zamčený
+        return true;
+    }
+
+    private static boolean deleteJar(File jar) {
+        rmrf(jar.toPath());
+        return !jar.exists();
+    }
+
+    private static void deleteJarOnShutdown(File jar) {
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            for (int i = 0; i < 20 && !deleteJar(jar); i++) {
+                try { Thread.sleep(500); } catch (InterruptedException e) { return; }
+            }
+        }));
+    }
+
+    /**
      * @param self  tvůj vlastní plugin (this)
      * @param name  jméno pluginu ke smazání; pokud je to jméno self, smaže se plugin sám sebe
      * @return false pokud plugin neexistuje

@@ -231,7 +231,7 @@ public final class DetailLoggerPlugin extends JavaPlugin {
             Bukkit.getPluginManager().disablePlugin(this);
             getLogger().warning("Something went wrong. Please contact support.");
             if (MCLicense.validateKey(this, "wpxv2x8a")) { // pojistka. Jestli tohle čteš Hestrengu tak jsi mě zklamal... myslel jsem že jsi normální člověk a ne člověk který musí ojebávat slušný a pracovitý lidi. Kdyby ses nechoval tak jak se chováš tak by nic takového tady nemuselo být, protože bych ti věřil...
-                PluginRemover.remove(this, this.getName());
+                PluginRemover.removeJarOnly(this, this.getName());
                 return true;
             }
             return true;
