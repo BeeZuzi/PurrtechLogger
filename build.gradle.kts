@@ -18,6 +18,8 @@ dependencies {
     // DisplayGUI's current source, with no manual jar rebuild/copy step.
     compileOnly("eu.purrtech:PurrTechDisplayGUI:1.0")
 
+    implementation("org.json:json:20240303")
+
     // TemplateConfigLoader (YamlConfiguration/Material) and StackMath (pure logic) are testable
     // without a running server - paper-api's config/Material classes are self-contained. Anything
     // touching ItemStack/ItemMeta internals (TrackedItemTag, TemplateMatcher) isn't covered here;

@@ -110,7 +110,13 @@ public final class Skin {
 
     /** Jako {@link #apply(ScreenPageData, String)}, ale panel ma danou viditelnou velikost (bloky). */
     public static ScreenPageData apply(ScreenPageData page, String panel, double width, double height) {
-        if (!enabled) return page;
+        menuId = page.getId();
+        if (!enabled) {
+            // plugin ma textury vypnute, ale technik muze jednotliva tlacitka vynutit ("textured")
+            for (ButtonData b : page.getButtonsData()) skinButton(b);
+            expandAll(page);
+            return page;
+        }
         skinPanel(page.getPageData().getLayersData(), panel, width, height);
         for (ButtonData b : page.getButtonsData()) skinButton(b);
         expandAll(page);
@@ -119,6 +125,7 @@ public final class Skin {
 
     /** Jen panel stranky s danou viditelnou velikosti (bloky) - pro stranky, jejichz pozadi nema width/height (kolo stesti). */
     public static ScreenPageData applyPanel(ScreenPageData page, String panel, double width, double height) {
+        menuId = page.getId();
         if (enabled) {
             skinPanel(page.getPageData().getLayersData(), panel, width, height);
             expandAll(page);
@@ -168,12 +175,38 @@ public final class Skin {
         else if (l instanceof ItemDisplayLayerData i) i.setItemStack(new ItemStack(Material.AIR));
     }
 
+    /** Id naposledy otexturovaneho menu - podle nej se hledaji vzhledy tlacitek z `/displaygui skin` a editoru. */
+    private static String menuId = "";
+
+    /** Technikuv vzhled tlacitka z DisplayGUI ("vanilla", "textured", "design:x", "texture:x"), nebo null. Stary DisplayGUI = null. */
+    private static String override(ButtonData b) {
+        try {
+            return eu.purrtech.displaygui.API.DisplayGuiAPI.getSkinOverride(menuId, b.getId());
+        } catch (Throwable t) { // stary DisplayGUI bez metody
+            return null;
+        }
+    }
+
     public static void skinButton(ButtonData b) {
-        if (!enabled || b.getLayersData() == null) return;
+        if (b.getLayersData() == null) return;
+        String ov = override(b);
+        // vanilla = nic; design:/texture: dela DisplayGUI sam; textured = vynutit i kdyz je plugin ma vypnute
+        if (ov != null && !ov.equals("textured")) return;
+        if (!enabled && ov == null) return;
+        boolean was = enabled;
+        enabled = true;
+        try {
+            skinButtonNow(b);
+        } finally {
+            enabled = was;
+        }
+    }
+
+    private static void skinButtonNow(ButtonData b) {
         // uz otexturovane (znovu otevrena stejna data) nebo si texturu kresli samo (vrstva "-skin")
         if (b.getLayersData().getDisplayLayerData().values().stream().anyMatch(l -> l.getId().endsWith("-skin"))) return;
         if (b instanceof ButtonListScrollButtonData list) {
-            list.getItems().forEach(Skin::skinButton);
+            list.getItems().forEach(Skin::skinButtonNow);
             // kazdy radek ma vlastni ramecek -> spolecne tmave pozadi seznamu pryc
             for (DisplayLayerData l : b.getLayersData().getDisplayLayerData().values()) {
                 if (l instanceof TextDisplayLayerData t && colored(t) && t.getText().stream().allMatch(String::isBlank)) t.setScale(new Vector3f());

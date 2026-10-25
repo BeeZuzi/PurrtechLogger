@@ -1,7 +1,11 @@
+# Owner of the plugin: PurrTech
+# Owner of the server agrees with Terms And Conditions:
+# https://purrtech.eu/obchodni-podminky
+
 # Language of everything the plugin shows players (menus, chat, /purrlog): "cs" or "en".
 # Server-wide - every player sees it, whatever language their own client uses.
 # Texts live in plugins/PurrTechDetailLogger/lang/<language>.yml and can be edited there (/purrlog reload).
-language: cs
+language: en
 
 # Shift-click and double-click shortcuts for ORDINARY (untracked) items, same as tracked items get:
 #   shift-click       tops up existing stacks front-to-back, then fills empty slots
@@ -51,7 +55,7 @@ gui:
   # Texturova varianta menu: ItemsAdder textury z namespace "king" (panel za menu, ramecek za kazdym
   # tlacitkem, slot za tlacitky s ikonou). Bez ItemsAdderu nebo chybejici textury zustane klasicke menu.
   textures:
-    enabled: true
+    enabled: false
     # Vlastni vzhled misto vestavenych textur: nazev designu z DisplayGUI (designs/*.yml, vytvoris ho
     # v /displaygui editoru). Design se roztahne tak, aby jeho rodicovska (nejnizsi) vrstva pokryla
     # tlacitko / panel / slot, ostatni vrstvy si drzi pozici vuci ni. Prazdne = vestavena textura.
