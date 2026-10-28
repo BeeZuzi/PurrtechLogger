@@ -116,8 +116,13 @@ public final class TemplateConfigLoader {
             logger.warning("templates.yml: '" + key + "' mode ledger plati jen pro itemy, track-blocks se ignoruje");
         }
 
+        String itemSnapshot = section.getString("item");
+        if (itemSnapshot != null && itemSnapshot.isBlank()) {
+            itemSnapshot = null;
+        }
+
         return new TemplateDefinition(key, material, customModelData, pdcMarkerKey, pdcMarkerValue,
-                namePattern, lorePattern, trackItems, trackBlocks, ledger);
+                namePattern, lorePattern, trackItems, trackBlocks, ledger, itemSnapshot);
     }
 
     private Pattern compilePattern(String templateKey, String raw, String fieldName) {

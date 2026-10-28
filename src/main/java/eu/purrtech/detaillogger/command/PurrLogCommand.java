@@ -11,6 +11,9 @@ import eu.purrtech.detaillogger.db.dao.TrackedUnitDao;
 import eu.purrtech.detaillogger.db.dao.TrackedUnitRecord;
 import eu.purrtech.detaillogger.gui.AdminGuiService;
 import eu.purrtech.detaillogger.lang.Lang;
+import eu.purrtech.detaillogger.template.TemplateDefinition;
+import eu.purrtech.detaillogger.template.TemplateItems;
+import eu.purrtech.detaillogger.template.TemplateMatcher;
 import eu.purrtech.detaillogger.template.TemplateRegistry;
 import eu.purrtech.detaillogger.tracking.HistoryService;
 import eu.purrtech.detaillogger.tracking.ItemTrackingService;
@@ -32,7 +35,9 @@ import org.jetbrains.annotations.Nullable;
 
 import java.io.File;
 import java.io.IOException;
+import java.util.Collection;
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -51,6 +56,12 @@ import java.util.UUID;
 public final class PurrLogCommand implements BasicCommand {
 
     public static final String ADMIN_PERMISSION = "purrtechdetaillogger.admin";
+
+    /** The most one /purrlog give hands out at once: a full inventory (36 slots of 64). */
+    private static final int MAX_GIVE_AMOUNT = 36 * 64;
+
+    private static final List<String> SUBCOMMANDS = List.of("gui", "history", "alerts", "players", "player", "sweep",
+            "tracking", "mint", "give", "issue", "ledger", "reference", "reload", "template", "debug", "dbtest");
 
     private final DetailLoggerPlugin plugin;
     private final TrackedUnitDao trackedUnitDao;
@@ -110,6 +121,14 @@ public final class PurrLogCommand implements BasicCommand {
         }
         if (args.length == 3 && args[0].equalsIgnoreCase("template") && args[1].equalsIgnoreCase("import")) {
             runTemplateImport(sender, args[2]);
+            return;
+        }
+        if (args.length == 3 && args[0].equalsIgnoreCase("template") && args[1].equalsIgnoreCase("item")) {
+            runTemplateItem(sender, args[2]);
+            return;
+        }
+        if (args.length >= 3 && args[0].equalsIgnoreCase("give")) {
+            runGive(sender, args);
             return;
         }
         if (args.length == 2 && args[0].equalsIgnoreCase("history")) {
@@ -503,6 +522,7 @@ public final class PurrLogCommand implements BasicCommand {
                 yaml.set(path + ".custom-model-data", Math.round(floats.get(0)));
             }
         }
+        yaml.set(path + ".item", TemplateItems.encode(itemTracking.untaggedSample(held)));
         yaml.set(path + ".track-items", true);
         yaml.set(path + ".track-blocks", false);
 
@@ -515,6 +535,147 @@ public final class PurrLogCommand implements BasicCommand {
 
         sender.sendMessage(Lang.t("cmd.template.added", key, held.getType()));
         runReload(sender);
+    }
+
+    /**
+     * {@code /purrlog template item <key>}: the held item becomes the item {@code /purrlog give} hands
+     * out for an EXISTING template - for templates made before the item was stored, or to swap it.
+     * Only the stored item changes, not what the template matches on.
+     */
+    private void runTemplateItem(CommandSender sender, String key) {
+        if (!(sender instanceof Player player)) {
+            sender.sendMessage(Lang.t("cmd.template.players-only"));
+            return;
+        }
+        ItemStack held = player.getInventory().getItemInMainHand();
+        if (held.getType().isAir()) {
+            sender.sendMessage(Lang.t("cmd.template.empty-hand"));
+            return;
+        }
+        YamlConfiguration yaml = YamlConfiguration.loadConfiguration(templatesFile);
+        String path = "templates." + key;
+        if (!yaml.contains(path)) {
+            sender.sendMessage(Lang.t("cmd.template.unknown", key));
+            return;
+        }
+        yaml.set(path + ".item", TemplateItems.encode(itemTracking.untaggedSample(held)));
+        try {
+            yaml.save(templatesFile);
+        } catch (IOException e) {
+            sender.sendMessage(Lang.t("cmd.template.save-failed", e.getMessage()));
+            return;
+        }
+        sender.sendMessage(Lang.t("cmd.template.item-set", key, held.getType()));
+        runReload(sender);
+    }
+
+    /**
+     * {@code /purrlog give <player> <template> [amount]}: hands out the template's item - the very item
+     * it was made from when it has one stored (see {@link TemplateItems}). The items are tagged the
+     * moment they land in the inventory like any other template item; a {@code mode: ledger} template is
+     * reported to the ledger as an issue, so the hand-out is not an unexplained gain.
+     */
+    private void runGive(CommandSender sender, String[] args) {
+        Player target = Bukkit.getPlayerExact(args[1]);
+        if (target == null) {
+            sender.sendMessage(Lang.t("cmd.player-offline", args[1]));
+            return;
+        }
+        Optional<TemplateDefinition> found = templateRegistry.definition(args[2]);
+        if (found.isEmpty()) {
+            sender.sendMessage(Lang.t("cmd.give.unknown-template", args[2], templateKeys()));
+            return;
+        }
+        TemplateDefinition definition = found.get();
+
+        int amount = 1;
+        if (args.length >= 4) {
+            try {
+                amount = Integer.parseInt(args[3]);
+            } catch (NumberFormatException e) {
+                amount = 0;
+            }
+        }
+        if (amount <= 0 || amount > MAX_GIVE_AMOUNT) {
+            sender.sendMessage(Lang.t("cmd.give.bad-amount", MAX_GIVE_AMOUNT));
+            return;
+        }
+
+        TemplateItems.Built built = TemplateItems.build(definition, plugin.getLogger());
+        ItemStack unit = built.item();
+        Optional<TemplateDefinition> matched = new TemplateMatcher(templateRegistry).match(unit);
+        if (matched.isEmpty() || !matched.get().key().equals(definition.key())) {
+            sender.sendMessage(Lang.t("cmd.give.mismatch", definition.key()));
+        }
+
+        if (definition.ledger()) {
+            ledgerService.issue(target, definition.key(), amount, "give " + sender.getName());
+        }
+
+        int perStack = Math.max(1, unit.getMaxStackSize());
+        int dropped = 0;
+        for (int left = amount; left > 0; left -= perStack) {
+            ItemStack stack = unit.clone();
+            stack.setAmount(Math.min(perStack, left));
+            for (ItemStack rest : target.getInventory().addItem(stack).values()) {
+                target.getWorld().dropItem(target.getLocation(), rest);
+                dropped += rest.getAmount();
+            }
+        }
+
+        sender.sendMessage(Lang.t("cmd.give.done", amount, definition.key(), target.getName()));
+        if (dropped > 0) {
+            sender.sendMessage(Lang.t("cmd.give.dropped", dropped));
+        }
+        if (!built.exact()) {
+            sender.sendMessage(Lang.t("cmd.give.approximate", definition.key()));
+        }
+    }
+
+    private String templateKeys() {
+        return String.join(", ", templateRegistry.definitions().stream().map(TemplateDefinition::key).toList());
+    }
+
+    @Override
+    public Collection<String> suggest(CommandSourceStack commandSourceStack, String[] args) {
+        if (args.length <= 1) {
+            return filter(SUBCOMMANDS, args.length == 0 ? "" : args[0]);
+        }
+        String sub = args[0].toLowerCase(Locale.ROOT);
+        String last = args[args.length - 1];
+        List<String> templateKeys = templateRegistry.definitions().stream().map(TemplateDefinition::key).toList();
+        switch (sub) {
+            case "give" -> {
+                if (args.length == 2) {
+                    return filter(onlineNames(), last);
+                }
+                if (args.length == 3) {
+                    return filter(templateKeys, last);
+                }
+                return args.length == 4 ? filter(List.of("1", "16", "64"), last) : List.of();
+            }
+            case "mint", "issue" -> {
+                return args.length == 2 ? filter(onlineNames(), last) : List.of();
+            }
+            case "template" -> {
+                if (args.length == 2) {
+                    return filter(List.of("import", "item"), last);
+                }
+                return args.length == 3 && args[1].equalsIgnoreCase("item") ? filter(templateKeys, last) : List.of();
+            }
+            default -> {
+                return List.of();
+            }
+        }
+    }
+
+    private static List<String> onlineNames() {
+        return Bukkit.getOnlinePlayers().stream().map(Player::getName).toList();
+    }
+
+    private static List<String> filter(List<String> options, String typed) {
+        String prefix = typed.toLowerCase(Locale.ROOT);
+        return options.stream().filter(option -> option.toLowerCase(Locale.ROOT).startsWith(prefix)).toList();
     }
 
     private void runDbTest(CommandSender sender) {

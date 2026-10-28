@@ -54,6 +54,18 @@ public final class ItemTrackingService {
     }
 
     /**
+     * A one-piece copy of the item without this plugin's tags (UUID, UUID list, template key) - what a
+     * template stores as "the item", so that handing it out never duplicates a UUID. Tagged items
+     * inside a shulker box or bundle are not looked at.
+     */
+    public ItemStack untaggedSample(ItemStack item) {
+        ItemStack copy = item.clone();
+        copy.setAmount(1);
+        itemTag.strip(copy);
+        return copy;
+    }
+
+    /**
      * Whether two stacks may share one slot: same material, same template, and identical in every
      * way (name, lore, enchants, other plugins' data...) EXCEPT this plugin's own tracking tags.
      * Vanilla can't stack tracked items at all, since every unit's tag differs - so every hand-built

@@ -133,6 +133,25 @@ class TemplateConfigLoaderTest {
                 .orElseThrow(() -> new AssertionError("missing key " + key));
     }
 
+    @Test
+    void readsTheStoredItemSnapshotAndTreatsABlankOneAsMissing() {
+        List<TemplateDefinition> defs = load("""
+                templates:
+                  with_item:
+                    material: DIAMOND
+                    item: "AAECAw=="
+                  blank_item:
+                    material: EMERALD
+                    item: "  "
+                  no_item:
+                    material: GOLD_INGOT
+                """);
+
+        assertEquals("AAECAw==", find(defs, "with_item").itemSnapshot());
+        assertEquals(null, find(defs, "blank_item").itemSnapshot());
+        assertEquals(null, find(defs, "no_item").itemSnapshot());
+    }
+
     private List<TemplateDefinition> load(String yaml) {
         try {
             Path file = Files.createTempFile(tempDir, "templates", ".yml");

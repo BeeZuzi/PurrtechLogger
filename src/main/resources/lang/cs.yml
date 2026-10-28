@@ -58,7 +58,9 @@ cmd:
     - "/purrlog ledger [sablona] - kdo kolik drzi ledger itemu"
     - "/purrlog reference [done] - drzeny item se stane referencnim (vzor pro crate), kopie dostanou nova UUID"
     - "/purrlog reload - znovu nacte config, jazyk a templates.yml"
-    - "/purrlog template import <klic> - vytvori sablonu z drzeneho itemu"
+    - "/purrlog template import <klic> - vytvori sablonu z drzeneho itemu (ulozi se i samotny item)"
+    - "/purrlog template item <klic> - drzeny item se stane ulozenym itemem existujici sablony"
+    - "/purrlog give <hrac> <sablona> [pocet] - da item ze sablony (ten puvodni, ze ktereho vznikla)"
     - "/purrlog debug on|off|dump|clear - trace klikani/dragu do debug.log; /purrlog debug stats - stav fronty zapisu do DB"
     - "/purrlog dbtest - overi DB potrubi zapisem/ctenim testovaciho zaznamu"
   players-only: Tento prikaz muze pouzit jen hrac.
@@ -126,6 +128,15 @@ cmd:
     exists: "Sablona s klicem '{0}' uz existuje."
     save-failed: "Ulozeni templates.yml selhalo: {0}"
     added: "Sablona '{0}' pridana (material={1}). Spoustim reload..."
+    unknown: "Sablona '{0}' neexistuje."
+    item-set: "Drzeny item ({1}) je ted ulozeny item sablony '{0}'. Spoustim reload..."
+  give:
+    unknown-template: "Sablona '{0}' neexistuje. Sablony: {1}"
+    bad-amount: "Pocet musi byt cele cislo od 1 do {0}."
+    mismatch: "Pozor: item sam o sobe sablone '{0}' neodpovida (vyhrava jina sablona, nebo se po ulozeni zmenilo prirazovani) - nebude oznacen."
+    done: "Dano {0}x '{1}' hraci {2}."
+    dropped: "{0} ks se nevesly a spadly hraci k noham."
+    approximate: "Sablona '{0}' nema ulozeny item, takze je to jen obycejny item slozeny z materialu/model dat. Drz ten pravy a pust /purrlog template item {0}."
   dbtest:
     written: "Zapsano testovaci UUID {0}, ctu zpet..."
     unit-ok: "tracked_units: OK (origin={0}, alive={1})"

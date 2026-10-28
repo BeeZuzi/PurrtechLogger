@@ -19,6 +19,13 @@ public record TemplateDefinition(
         boolean trackItems,
         boolean trackBlocks,
         /** {@code mode: ledger} - items are counted, not tagged: no UUID, they stack like vanilla. */
-        boolean ledger
+        boolean ledger,
+        /**
+         * The item the template was created from, exactly as it was (Base64 of
+         * {@code ItemStack#serializeAsBytes}, one piece, tracking tags removed) - what
+         * {@code /purrlog give} hands out. Null for templates written by hand or created before the
+         * snapshot existed; see {@link TemplateItems}.
+         */
+        String itemSnapshot
 ) {
 }

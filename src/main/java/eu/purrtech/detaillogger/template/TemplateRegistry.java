@@ -99,6 +99,16 @@ public final class TemplateRegistry {
         return definitions;
     }
 
+    /** The loaded template with this key (exact match), if any. */
+    public java.util.Optional<TemplateDefinition> definition(String templateKey) {
+        for (TemplateDefinition definition : definitions) {
+            if (definition.key().equals(templateKey)) {
+                return java.util.Optional.of(definition);
+            }
+        }
+        return java.util.Optional.empty();
+    }
+
     public Integer idOf(String templateKey) {
         return templateIds.get(templateKey);
     }

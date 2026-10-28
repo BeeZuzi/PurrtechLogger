@@ -58,7 +58,9 @@ cmd:
     - "/purrlog ledger [template] - who holds how much of a ledger item"
     - "/purrlog reference [done] - the held item becomes a reference (crate master), copies get new UUIDs"
     - "/purrlog reload - reloads config, language and templates.yml"
-    - "/purrlog template import <key> - creates a template from the held item"
+    - "/purrlog template import <key> - creates a template from the held item (the item itself is stored too)"
+    - "/purrlog template item <key> - the held item becomes the stored item of an existing template"
+    - "/purrlog give <player> <template> [amount] - gives the template's item (the original one it was made from)"
     - "/purrlog debug on|off|dump|clear - trace clicks/drags into debug.log; /purrlog debug stats - DB write queue state"
     - "/purrlog dbtest - checks the DB pipeline by writing and reading a test record"
   players-only: Only a player can use this command.
@@ -126,6 +128,15 @@ cmd:
     exists: "A template with key '{0}' already exists."
     save-failed: "Saving templates.yml failed: {0}"
     added: "Template '{0}' added (material={1}). Reloading..."
+    unknown: "There is no template '{0}'."
+    item-set: "The held item ({1}) is now the stored item of template '{0}'. Reloading..."
+  give:
+    unknown-template: "There is no template '{0}'. Templates: {1}"
+    bad-amount: "The amount must be a whole number from 1 to {0}."
+    mismatch: "Warning: the item does not match template '{0}' on its own (another template wins, or the matching was changed after the item was stored) - it will not be tagged."
+    done: "Gave {0}x '{1}' to {2}."
+    dropped: "{0} pcs did not fit and were dropped at their feet."
+    approximate: "Template '{0}' has no stored item, so this is only a plain item rebuilt from its material/model data. Hold the real one and run /purrlog template item {0}."
   dbtest:
     written: "Wrote test UUID {0}, reading it back..."
     unit-ok: "tracked_units: OK (origin={0}, alive={1})"
