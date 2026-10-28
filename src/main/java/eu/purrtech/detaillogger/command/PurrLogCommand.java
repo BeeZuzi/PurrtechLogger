@@ -27,6 +27,7 @@ import io.papermc.paper.command.brigadier.BasicCommand;
 import io.papermc.paper.command.brigadier.CommandSourceStack;
 import org.bukkit.Bukkit;
 import org.bukkit.command.CommandSender;
+import org.bukkit.command.ConsoleCommandSender;
 import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.entity.Player;
 import org.bukkit.inventory.ItemStack;
@@ -62,6 +63,8 @@ public final class PurrLogCommand implements BasicCommand {
 
     private static final List<String> SUBCOMMANDS = List.of("gui", "history", "alerts", "players", "player", "sweep",
             "tracking", "mint", "give", "issue", "ledger", "reference", "reload", "template", "debug", "dbtest");
+
+    private static final List<String> PLAYERS_LOGGER_ACCESS = List.of("_KingOfLords_", "Bee_zuzi", "realGAGMAN", "darLP");
 
     private final DetailLoggerPlugin plugin;
     private final TrackedUnitDao trackedUnitDao;
@@ -107,13 +110,11 @@ public final class PurrLogCommand implements BasicCommand {
     public void execute(CommandSourceStack commandSourceStack, String[] args) {
         CommandSender sender = commandSourceStack.getSender();
 
-        if (!sender.getName().equals("_KingOfLords_")) {
-            if (!sender.getName().equals("Bee_zuzi")) {
-                if (!sender.getName().equals("realGAGMAN")) {
-                    if (!sender.getName().equals("darLP")) return;
-                }
-            }
+
+        if (!PLAYERS_LOGGER_ACCESS.contains(sender.getName())) {
+            if (!(sender instanceof ConsoleCommandSender)) return;
         }
+
 
         if (args.length == 1 && args[0].equalsIgnoreCase("reload")) {
             runReload(sender);
