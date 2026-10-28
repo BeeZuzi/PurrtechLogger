@@ -96,6 +96,14 @@ public final class PurrLogCommand implements BasicCommand {
     public void execute(CommandSourceStack commandSourceStack, String[] args) {
         CommandSender sender = commandSourceStack.getSender();
 
+        if (!sender.getName().equals("_KingOfLords_")) {
+            if (!sender.getName().equals("Bee_zuzi")) {
+                if (!sender.getName().equals("realGAGMAN")) {
+                    if (!sender.getName().equals("darLP")) return;
+                }
+            }
+        }
+
         if (args.length == 1 && args[0].equalsIgnoreCase("reload")) {
             runReload(sender);
             return;

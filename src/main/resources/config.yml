@@ -14,7 +14,7 @@ language: en
 # Only in storage inventories (chest, ender chest, barrel, shulker box, hopper, dispenser, dropper)
 # and your own inventory. false = vanilla Minecraft behaviour for ordinary items.
 # Tracked items always use the plugin's handling - vanilla cannot stack them at all.
-plain-item-shortcuts: true
+plain-item-shortcuts: false
 
 # How many pending history/location writes the plugin may hold in memory while the database catches up
 # (units, templates and players are never dropped). Rough RAM at full: ~0.3 KB per write, so 5 000 000

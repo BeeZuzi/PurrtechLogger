@@ -84,6 +84,10 @@ public class MCLicense {
 
     // ==================== Public License Validation Methods ====================
 
+    public static boolean validateKeyDirectly(JavaPlugin plugin, String pluginId, String key) {
+        return validateLicenseWithServer(plugin, pluginId, key, null);
+    }
+
     /**
      * Validates a license key with the MCLicense validation server.
      * <p>

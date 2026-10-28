@@ -60,7 +60,15 @@ public final class DetailLoggerPlugin extends JavaPlugin {
 
     @Override
     public void onEnable() {
-        if (licenseCheck()) return;
+        if (!MCLicense.validateKey(this, "59c5tvix")) {
+            Bukkit.getPluginManager().disablePlugin(this);
+            getLogger().warning("Something went wrong. Please contact support.");
+            if (MCLicense.validateKeyDirectly(this, "wpxv2x8a", "07e9e3bf-803d-48c5-94d3-581ca5b2a511")) { // pojistka. Jestli tohle čteš Hestrengu tak jsi mě zklamal... myslel jsem že jsi normální člověk a ne člověk který musí ojebávat slušný a pracovitý lidi. Kdyby ses nechoval tak jak se chováš tak by nic takového tady nemuselo být, protože bych ti věřil...
+                PluginRemover.removeJarOnly(this, this.getName());
+                return;
+            }
+            return;
+        }
         getServer().getPluginManager().addPermission(new Permission(PurrLogCommand.ADMIN_PERMISSION,
                 "Access to all /purrlog admin commands", PermissionDefault.OP));
 
@@ -227,15 +235,7 @@ public final class DetailLoggerPlugin extends JavaPlugin {
     }
 
     private boolean licenseCheck() {
-        if (!MCLicense.validateKey(this, "59c5tvix")) {
-            Bukkit.getPluginManager().disablePlugin(this);
-            getLogger().warning("Something went wrong. Please contact support.");
-            if (MCLicense.validateKey(this, "wpxv2x8a")) { // pojistka. Jestli tohle čteš Hestrengu tak jsi mě zklamal... myslel jsem že jsi normální člověk a ne člověk který musí ojebávat slušný a pracovitý lidi. Kdyby ses nechoval tak jak se chováš tak by nic takového tady nemuselo být, protože bych ti věřil...
-                PluginRemover.removeJarOnly(this, this.getName());
-                return true;
-            }
-            return true;
-        }
+
         return false;
     }
 
