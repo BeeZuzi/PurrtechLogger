@@ -12,11 +12,13 @@ import org.bukkit.Material;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
+import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.inventory.ClickType;
 import org.bukkit.event.inventory.InventoryAction;
 import org.bukkit.event.inventory.DragType;
 import org.bukkit.event.inventory.InventoryClickEvent;
+import org.bukkit.event.inventory.InventoryCloseEvent;
 import org.bukkit.event.inventory.InventoryDragEvent;
 import org.bukkit.event.inventory.InventoryMoveItemEvent;
 import org.bukkit.event.inventory.InventoryOpenEvent;
@@ -94,13 +96,21 @@ public final class ContainerListener implements Listener {
     private final ItemTrackingService tracking;
     private final Plugin plugin;
     private final Map<UUID, LastClick> lastClicks = new ConcurrentHashMap<>();
+    /** Per player: top inventory of the open menu known to block taking items - see {@link #onClickOutcome}. */
+    private final Map<UUID, Inventory> lockedMenus = new ConcurrentHashMap<>();
+    /** The click {@link #onClick} itself cancelled, so {@link #onClickOutcome} doesn't take our own
+     * cancel for another plugin's lock. Main thread only. */
+    private InventoryClickEvent handledByUs;
 
     public ContainerListener(ItemTrackingService tracking, Plugin plugin) {
         this.tracking = tracking;
         this.plugin = plugin;
     }
 
-    @EventHandler
+    // HIGHEST + the isCancelled() check below: every other plugin has had its say first. At NORMAL a
+    // locked menu (crate preview...) that cancels at HIGH was too late - the hand-built shift-click
+    // had already moved the tracked item out ("normálním klikem nejde vzít ale shift clickem jde").
+    @EventHandler(priority = EventPriority.HIGHEST)
     public void onClick(InventoryClickEvent event) {
         if (!(event.getWhoClicked() instanceof Player player)) {
             return;
@@ -110,7 +120,18 @@ public final class ContainerListener implements Listener {
                     + " slot=" + event.getSlot() + " raw=" + event.getRawSlot()
                     + " inv=" + (event.getClickedInventory() != null ? event.getClickedInventory().getType() : "null")
                     + " slotItem=" + StackDebug.describe(event.getCurrentItem())
-                    + " cursor=" + StackDebug.describe(event.getCursor()));
+                    + " cursor=" + StackDebug.describe(event.getCursor())
+                    + " cancelled=" + event.isCancelled());
+        }
+        if (event.isCancelled()) {
+            StackDebug.log("    -> zruseno jinym pluginem, nic se nepresouva");
+            return;
+        }
+        if (isShortcutClick(event.getClick()) && isLockedMenu(event.getView(), player)) {
+            event.setCancelled(true);
+            handledByUs = event;
+            StackDebug.log("    -> zamcene menu, zkratka " + event.getClick() + " zablokovana");
+            return;
         }
         if (event.getAction() == InventoryAction.CLONE_STACK && player.getGameMode() == GameMode.CREATIVE) {
             // Middle-click in creative copies the stack onto the cursor, UUIDs and all. The reconcile
@@ -135,6 +156,7 @@ public final class ContainerListener implements Listener {
             StackDebug.log("    -> zpracovano rucne: shift-double-click (event zrusen)");
         }
         if (handledByHand) {
+            handledByUs = event;
             lastClicks.remove(player.getUniqueId()); // a 3rd quick click starts over, not another bulk move
             return;
         }
@@ -143,6 +165,7 @@ public final class ContainerListener implements Listener {
                 : tryShiftClick(event, player) ? "tryShiftClick"
                 : tryPlainShortcut(event) ? "tryPlainShortcut" : null;
         if (handler != null) {
+            handledByUs = event;
             StackDebug.log("    -> zpracovano rucne: " + handler + " (event zrusen)"
                     + " slotPo=" + StackDebug.describe(event.getClickedInventory() != null && event.getSlot() >= 0
                             ? event.getClickedInventory().getItem(event.getSlot()) : null)
@@ -166,6 +189,72 @@ public final class ContainerListener implements Listener {
                 reconcileClickResult(clicked, slot, player, viewTitle);
             }
         });
+    }
+
+    /**
+     * Learns locked menus: a click on an item in a menu's top inventory that some OTHER plugin
+     * cancelled (a crate preview showing the reference item, a view-only chest...) means that menu
+     * doesn't let items out. From then on, until the player closes it, {@link #onClick} also blocks
+     * the shortcut clicks there ({@link #isShortcutClick}) - even if the other plugin itself only
+     * guards plain clicks. MONITOR, so every plugin's cancel is already in.
+     */
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void onClickOutcome(InventoryClickEvent event) {
+        boolean ours = event == handledByUs;
+        handledByUs = null;
+        if (ours || !event.isCancelled() || !(event.getWhoClicked() instanceof Player player)) {
+            return;
+        }
+        Inventory top = event.getView().getTopInventory();
+        ItemStack current = event.getCurrentItem();
+        if (event.getClickedInventory() != top || isOwnInventory(top) || current == null || current.getType().isAir()) {
+            return;
+        }
+        if (lockedMenus.put(player.getUniqueId(), top) != top) {
+            StackDebug.log("    -> menu '" + plainTitle(event.getView()) + "' zamceno (jiny plugin zrusil klik),"
+                    + " shift/double-click/klavesy v nem budou blokovane");
+        }
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void onClose(InventoryCloseEvent event) {
+        lockedMenus.remove(event.getPlayer().getUniqueId(), event.getView().getTopInventory());
+    }
+
+    /** Clicks that move items without the player picking up the exact slot: shift (both ways),
+     * double-click gather, hotbar/offhand swap, drop key. Plain left/right clicks stay the other
+     * plugin's decision, slot by slot. */
+    private static boolean isShortcutClick(ClickType click) {
+        return click.isShiftClick() || click == ClickType.DOUBLE_CLICK || click == ClickType.NUMBER_KEY
+                || click == ClickType.SWAP_OFFHAND || click == ClickType.DROP || click == ClickType.CONTROL_DROP;
+    }
+
+    /** Learned from a cancelled click ({@link #onClickOutcome}), or listed by title in config
+     * {@code locked-menus}. */
+    private boolean isLockedMenu(InventoryView view, Player player) {
+        Inventory top = view.getTopInventory();
+        if (isOwnInventory(top)) {
+            return false;
+        }
+        if (lockedMenus.get(player.getUniqueId()) == top) {
+            return true;
+        }
+        List<String> titles = plugin.getConfig().getStringList("locked-menus");
+        if (titles.isEmpty()) {
+            return false;
+        }
+        String title = plainTitle(view).toLowerCase(java.util.Locale.ROOT);
+        for (String wanted : titles) {
+            if (!wanted.isBlank() && title.contains(wanted.toLowerCase(java.util.Locale.ROOT))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** The player's own inventory view (its top is the 2x2 crafting grid) - never a menu. */
+    private static boolean isOwnInventory(Inventory top) {
+        return top.getType() == InventoryType.CRAFTING || top.getType() == InventoryType.PLAYER;
     }
 
     /**
@@ -766,7 +855,8 @@ public final class ContainerListener implements Listener {
     }
 
     // ignoreCancelled: a drag another plugin already cancelled (locked GUI) must not be applied by hand.
-    @EventHandler(ignoreCancelled = true)
+    // HIGHEST so that also covers plugins cancelling at HIGH, same as onClick.
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onDrag(InventoryDragEvent event) {
         if (!(event.getWhoClicked() instanceof Player player)) {
             return;

@@ -16,6 +16,15 @@ language: en
 # Tracked items always use the plugin's handling - vanilla cannot stack them at all.
 plain-item-shortcuts: false
 
+# Locked menus (crate previews, view-only chests...): menus another plugin does not let you take items from.
+# When that plugin blocks a normal click on an item in a menu (e.g. on the reference item in a crate preview),
+# the menu is remembered as locked for that player until it is closed, and shift-click, double-click,
+# number keys, offhand swap (F) and the drop key (Q) are blocked in it too - even if the other plugin
+# only blocks normal clicks. This happens on its own; no setup needed.
+# Here you can list menus that are locked from the very first click: part of the menu title
+# (case-insensitive), e.g. ["Crate preview", "Nahled bedny"].
+locked-menus: []
+
 # How many pending history/location writes the plugin may hold in memory while the database catches up
 # (units, templates and players are never dropped). Rough RAM at full: ~0.3 KB per write, so 5 000 000
 # is about 1.5 GB. Lower it on a small server. When the queue fills up, low-priority events go first.
